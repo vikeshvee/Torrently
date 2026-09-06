@@ -1,0 +1,107 @@
+{
+  "name": "torrently",
+  "version": "1.0.0",
+  "description": "Cross-platform desktop torrent client with instant video streaming while downloading",
+  "main": "src/main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "test": "node --test tests/*.test.js",
+    "icon": "electron scripts/generate-icon.js",
+    "dist": "electron-builder --mac dmg zip --arm64",
+    "dist:dmg": "electron-builder --mac dmg --arm64",
+    "dist:dir": "electron-builder --dir --arm64"
+  },
+  "keywords": [
+    "torrent",
+    "bittorrent",
+    "webtorrent",
+    "video-streaming",
+    "cross-platform",
+    "electron"
+  ],
+  "author": "vikeshvee <vikeshvee@gmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "webtorrent": "^3.0.21"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.torrently.app",
+    "productName": "Torrently",
+    "copyright": "Copyright © 2026 Torrently Team",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+      "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
+      "!**/node_modules/*.d.ts",
+      "!**/node_modules/.bin",
+      "!tests",
+      "!skills",
+      "!scripts",
+      "!Downloads"
+    ],
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.utilities",
+      "identity": null,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["arm64"]
+        }
+      ]
+    },
+    "dmg": {
+      "title": "Torrently ${version}",
+      "icon": "build/icon.icns",
+      "iconSize": 110,
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      }
+    },
+    "fileAssociations": [
+      {
+        "ext": "torrent",
+        "name": "BitTorrent File",
+        "role": "Viewer",
+        "mimeType": "application/x-bittorrent"
+      }
+    ],
+    "protocols": [
+      {
+        "name": "Magnet URI Scheme",
+        "schemes": [
+          "magnet"
+        ]
+      }
+    ]
+  }
+}
