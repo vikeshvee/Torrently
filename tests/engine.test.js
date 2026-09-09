@@ -1144,5 +1144,77 @@ test('Torrent creation & seeding: createAndSeedTorrent creates valid torrent wit
   engine.destroy();
 });
 
+test('Directory sharing: createAndSeedTorrent packages directory trees and sub-files with valid Magnet URI and trackers', async () => {
+  const engine = new TorrentEngine({ disableState: true });
+  await engine.init();
 
+  const tmpDir = path.join(__dirname, 'tmp_share_folder');
+  if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+  const subDir = path.join(tmpDir, 'subfolder');
+  if (!fs.existsSync(subDir)) fs.mkdirSync(subDir, { recursive: true });
 
+  fs.writeFileSync(path.join(tmpDir, 'file1.txt'), 'Sample document 1');
+  fs.writeFileSync(path.join(subDir, 'file2.bin'), 'Sample binary payload 2');
+
+  try {
+    const created = await engine.createAndSeedTorrent(tmpDir, {
+      name: 'TestDirectoryShare',
+      trackers: ['udp://tracker.opentrackers.org:1337/announce', 'udp://open.stealth.si:80/announce']
+    });
+
+    assert.ok(created.infoHash);
+    assert.strictEqual(created.name, 'TestDirectoryShare');
+    assert.strictEqual(created.isMyTorrent, true);
+    assert.strictEqual(created.createdByUser, true);
+    assert.strictEqual(created.isMultiFile, true);
+    assert.strictEqual(created.files.length, 2);
+    assert.ok(created.magnetURI.startsWith('magnet:?xt=urn:btih:'));
+    assert.ok(created.magnetURI.includes('TestDirectoryShare'));
+    assert.ok(created.magnetURI.includes('tracker.opentrackers.org'));
+
+    // Check underlying torrent record has torrentFileBase64
+    const internalTorrent = engine.torrents.get(created.infoHash);
+    assert.ok(internalTorrent);
+    assert.ok(internalTorrent.torrentFile || internalTorrent.torrentFileBase64);
+  } finally {
+    if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  engine.destroy();
+});
+
+test('Binary .torrent export: converts Uint8Array buffers cleanly and produces parseable bencoded torrent files', async () => {
+  const engine = new TorrentEngine({ disableState: true });
+  await engine.init();
+
+  const tmpFile = path.join(__dirname, 'tmp_export_target.txt');
+  fs.writeFileSync(tmpFile, 'Binary bencoded torrent buffer verification string');
+
+  try {
+    const created = await engine.createAndSeedTorrent(tmpFile, {
+      name: 'ExportableTorrent'
+    });
+
+    const internalTorrent = engine.torrents.get(created.infoHash);
+    assert.ok(internalTorrent);
+
+    // Simulate binary export logic
+    let torrentBuf = null;
+    if (internalTorrent.torrentFile) {
+      torrentBuf = Buffer.from(internalTorrent.torrentFile);
+    } else if (internalTorrent.torrentFileBase64) {
+      torrentBuf = Buffer.from(internalTorrent.torrentFileBase64, 'base64');
+    }
+
+    assert.ok(torrentBuf, 'Torrent buffer must exist');
+    assert.strictEqual(Buffer.isBuffer(torrentBuf), true);
+    assert.ok(torrentBuf.length > 0);
+
+    // Must start with 'd' (standard bencoded dictionary marker: d8:announce...)
+    assert.strictEqual(torrentBuf[0], 0x64); // 'd' in ASCII
+  } finally {
+    if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+  }
+
+  engine.destroy();
+});

@@ -293,6 +293,7 @@ class TorrentEngine extends EventEmitter {
                     isMyTorrent: Boolean(saved.isMyTorrent || saved.createdByUser),
                     createdByUser: Boolean(saved.createdByUser || saved.isMyTorrent),
                     magnetURI: saved.magnetURI || '',
+                    torrentFileBase64: saved.torrentFileBase64 || null,
                     blockedPeers: saved.blockedPeers || []
                   });
                 } catch (err) {
@@ -343,6 +344,11 @@ class TorrentEngine extends EventEmitter {
         const prog = getMetric(t, 'progress', 0);
         const len = t.length || 0;
 
+        let tfBase64 = t.torrentFileBase64 || null;
+        if (!tfBase64 && t.torrentFile) {
+          tfBase64 = Buffer.from(t.torrentFile).toString('base64');
+        }
+
         return {
           infoHash: t.infoHash,
           torrentId: savedSource,
@@ -363,6 +369,7 @@ class TorrentEngine extends EventEmitter {
           isMyTorrent: Boolean(t.isMyTorrent || t.createdByUser),
           createdByUser: Boolean(t.createdByUser || t.isMyTorrent),
           magnetURI: t.magnetURI || '',
+          torrentFileBase64: tfBase64,
           blockedPeers: Array.from(t.blockedPeers || [])
         };
       });
@@ -976,15 +983,35 @@ class TorrentEngine extends EventEmitter {
       seedOpts.pieceLength = options.pieceLength;
     }
 
+    const buildMagnet = (hash, name) => {
+      let uri = `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(name || 'download')}`;
+      for (const tr of trackers) {
+        uri += `&tr=${encodeURIComponent(tr)}`;
+      }
+      return uri;
+    };
+
     if (this.client && typeof this.client.seed === 'function') {
       return new Promise((resolve, reject) => {
-        try {
-          this.client.seed(expandedPath, seedOpts, (wtTorrent) => {
+        let isSettled = false;
+
+        const settleSuccess = (wtTorrent) => {
+          if (isSettled) return;
+          isSettled = true;
+          try {
             wtTorrent.isMyTorrent = true;
             wtTorrent.createdByUser = true;
             wtTorrent.downloadPath = expandedPath;
             wtTorrent.blockedPeers = new Set(options.blockedPeers || []);
             wtTorrent._disk_completed = true;
+
+            if (wtTorrent.torrentFile) {
+              wtTorrent.torrentFileBase64 = Buffer.from(wtTorrent.torrentFile).toString('base64');
+            }
+            if (!wtTorrent.magnetURI || !wtTorrent.magnetURI.includes('&tr=')) {
+              wtTorrent.magnetURI = buildMagnet(wtTorrent.infoHash, wtTorrent.name || torrentName);
+            }
+
             setMetric(wtTorrent, 'progress', 1.0);
             if (wtTorrent.length) setMetric(wtTorrent, 'downloaded', wtTorrent.length);
 
@@ -1002,9 +1029,35 @@ class TorrentEngine extends EventEmitter {
             if (!this.disableState) this.saveState();
 
             resolve(this.formatTorrentMeta(wtTorrent));
+          } catch (err) {
+            reject(err);
+          }
+        };
+
+        try {
+          const torrent = this.client.seed(expandedPath, seedOpts, (wtTorrent) => {
+            settleSuccess(wtTorrent);
           });
+
+          if (torrent) {
+            torrent.once('error', (err) => {
+              if (!isSettled) {
+                isSettled = true;
+                reject(err);
+              }
+            });
+            torrent.once('ready', () => {
+              settleSuccess(torrent);
+            });
+            torrent.once('metadata', () => {
+              settleSuccess(torrent);
+            });
+          }
         } catch (err) {
-          reject(err);
+          if (!isSettled) {
+            isSettled = true;
+            reject(err);
+          }
         }
       });
     }
@@ -1063,7 +1116,7 @@ class TorrentEngine extends EventEmitter {
       downloadSpeed: 0,
       uploadSpeed: 0,
       numPeers: 0,
-      magnetURI: `magnet:?xt=urn:btih:${mockHash}&dn=${encodeURIComponent(torrentName)}`,
+      magnetURI: buildMagnet(mockHash, torrentName),
       blockedPeers: new Set(options.blockedPeers || []),
       files: mockFiles.map((f, i) => ({
         index: i,
@@ -1076,6 +1129,18 @@ class TorrentEngine extends EventEmitter {
       })),
       _disk_completed: true
     };
+
+    try {
+      const createTorrentModule = await import('create-torrent');
+      const createTorrent = createTorrentModule.default || createTorrentModule;
+      const buf = await new Promise((res) => {
+        createTorrent(expandedPath, seedOpts, (err, b) => res(b ? Buffer.from(b) : null));
+      });
+      if (buf) {
+        mockTorrent.torrentFile = buf;
+        mockTorrent.torrentFileBase64 = buf.toString('base64');
+      }
+    } catch (e) {}
 
     this.torrents.set(mockHash, mockTorrent);
     this.emit('torrent-added', this.formatTorrentMeta(mockTorrent));

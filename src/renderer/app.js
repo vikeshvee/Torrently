@@ -264,6 +264,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnEmptyCreateFolder = document.getElementById('btn-empty-create-folder');
   const emptyPlusBtn = document.getElementById('empty-plus-btn');
 
+  // Share Modal Elements
+  const shareModal = document.getElementById('share-modal');
+  const shareModalTitle = document.getElementById('share-modal-title');
+  const shareModalSize = document.getElementById('share-modal-size');
+  const shareModalFiles = document.getElementById('share-modal-files');
+  const shareModalNodes = document.getElementById('share-modal-nodes');
+  const shareSourceBadge = document.getElementById('share-source-badge');
+  const shareMagnetInput = document.getElementById('share-magnet-input');
+  const btnCopyShareMagnet = document.getElementById('btn-copy-share-magnet');
+  const magnetCopyBadge = document.getElementById('magnet-copy-badge');
+  const btnDownloadShareTorrent = document.getElementById('btn-download-share-torrent');
+  const shareInfohashInput = document.getElementById('share-infohash-input');
+  const btnCopyShareHash = document.getElementById('btn-copy-share-hash');
+  const hashCopyBadge = document.getElementById('hash-copy-badge');
+  const btnCloseShareModal = document.getElementById('btn-close-share-modal');
+  const btnCloseShareDone = document.getElementById('btn-close-share-done');
+  const btnTopShare = document.getElementById('btn-top-share');
+
+  let activeShareInfoHash = null;
   let selectedCreateSource = null;
 
   const DEFAULT_SWARM_TRACKERS = [
@@ -277,6 +296,50 @@ document.addEventListener('DOMContentLoaded', async () => {
     'udp://open.demonii.com:1337/announce',
     'http://tracker.openbittorrent.com:80/announce'
   ].join('\n');
+
+  window.openShareModal = async function(infoHash) {
+    activeShareInfoHash = infoHash;
+    if (!shareModal) return;
+
+    let t = torrentDataMap.get(infoHash);
+    let shareInfo = null;
+    if (ipcRenderer) {
+      try {
+        shareInfo = await ipcRenderer.invoke('get-torrent-share-info', infoHash);
+      } catch (e) {}
+    }
+
+    const title = (shareInfo && shareInfo.name) || (t && t.name) || 'Torrent';
+    const size = (shareInfo && shareInfo.totalSizeText) || (t && t.totalSizeText) || (t && formatBytes(t.length)) || '0 B';
+    const filesCount = (shareInfo && shareInfo.filesCount) || (t && t.files && t.files.length) || 1;
+    const isMulti = (shareInfo && shareInfo.isMultiFile) || (t && t.isMultiFile) || filesCount > 1;
+    const nodesCount = (shareInfo && shareInfo.numPeers) || (t && t.numPeers) || 0;
+    const isMy = (shareInfo && shareInfo.isMyTorrent) || (t && t.isMyTorrent);
+    const magnet = (shareInfo && shareInfo.magnetURI) || (t && t.magnetURI) || `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(title)}`;
+
+    if (shareModalTitle) shareModalTitle.textContent = title;
+    if (shareModalSize) shareModalSize.textContent = size;
+    if (shareModalFiles) shareModalFiles.textContent = `${filesCount} ${filesCount === 1 ? 'file' : 'files'}${isMulti ? ' (Directory)' : ''}`;
+    if (shareModalNodes) shareModalNodes.textContent = `${nodesCount} connected ${nodesCount === 1 ? 'node' : 'nodes'}`;
+    if (shareSourceBadge) {
+      shareSourceBadge.textContent = isMy ? 'SEEDING SOURCE' : 'ACTIVE TORRENT';
+      shareSourceBadge.style.background = isMy ? '#D1FAE5' : '#E0F2FE';
+      shareSourceBadge.style.color = isMy ? '#047857' : '#0369A1';
+      shareSourceBadge.style.borderColor = isMy ? '#A7F3D0' : '#BAE6FD';
+    }
+
+    if (shareMagnetInput) shareMagnetInput.value = magnet;
+    if (shareInfohashInput) shareInfohashInput.value = infoHash;
+    if (magnetCopyBadge) magnetCopyBadge.style.display = 'none';
+    if (hashCopyBadge) hashCopyBadge.style.display = 'none';
+
+    shareModal.classList.add('active');
+  };
+
+  function closeShareModal() {
+    if (shareModal) shareModal.classList.remove('active');
+    activeShareInfoHash = null;
+  }
 
   function openCreateTorrentModal(initialSourceType = null) {
     if (createTorrentModal) {
@@ -1040,6 +1103,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     closePeersInspector();
     closePlayerModal();
     closeCreateTorrentModal();
+    closeShareModal();
   }
 
   // Close all open dialogs on Escape key
@@ -1050,7 +1114,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Close modals when clicking outside modal content
-  [magnetModal, addPromptModal, removeModal, playerModal, createTorrentModal].forEach((overlay) => {
+  [magnetModal, addPromptModal, removeModal, playerModal, createTorrentModal, shareModal].forEach((overlay) => {
     if (overlay) {
       overlay.addEventListener('click', (e) => {
         if (e.target === overlay) {
@@ -1062,6 +1126,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Create Torrent Dialog Triggers
   if (btnCreateTorrentTop) btnCreateTorrentTop.addEventListener('click', () => openCreateTorrentModal());
+  if (btnTopShare) btnTopShare.addEventListener('click', () => openCreateTorrentModal());
   if (btnEmptyCreateFile) btnEmptyCreateFile.addEventListener('click', () => openCreateTorrentModal('file'));
   if (btnEmptyCreateFolder) btnEmptyCreateFolder.addEventListener('click', () => openCreateTorrentModal('folder'));
   if (emptyPlusBtn) emptyPlusBtn.addEventListener('click', () => openCreateTorrentModal());
@@ -1070,6 +1135,110 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (btnCancelCreate) btnCancelCreate.addEventListener('click', closeCreateTorrentModal);
   if (btnChooseCreateFile) btnChooseCreateFile.addEventListener('click', () => chooseCreateSource('file'));
   if (btnChooseCreateFolder) btnChooseCreateFolder.addEventListener('click', () => chooseCreateSource('folder'));
+
+  if (btnCloseShareModal) btnCloseShareModal.addEventListener('click', closeShareModal);
+  if (btnCloseShareDone) btnCloseShareDone.addEventListener('click', closeShareModal);
+
+  if (btnCopyShareMagnet) {
+    btnCopyShareMagnet.addEventListener('click', () => {
+      const magnet = shareMagnetInput ? shareMagnetInput.value : '';
+      if (!magnet) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(magnet).then(() => {
+          if (magnetCopyBadge) magnetCopyBadge.style.display = 'inline';
+          setTimeout(() => { if (magnetCopyBadge) magnetCopyBadge.style.display = 'none'; }, 3000);
+        }).catch(() => {
+          prompt('Copy Magnet Link:', magnet);
+        });
+      } else {
+        prompt('Copy Magnet Link:', magnet);
+      }
+    });
+  }
+
+  if (btnCopyShareHash) {
+    btnCopyShareHash.addEventListener('click', () => {
+      const hash = shareInfohashInput ? shareInfohashInput.value : '';
+      if (!hash) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(hash).then(() => {
+          if (hashCopyBadge) hashCopyBadge.style.display = 'inline';
+          setTimeout(() => { if (hashCopyBadge) hashCopyBadge.style.display = 'none'; }, 3000);
+        }).catch(() => {
+          prompt('Copy InfoHash:', hash);
+        });
+      } else {
+        prompt('Copy InfoHash:', hash);
+      }
+    });
+  }
+
+  if (btnDownloadShareTorrent) {
+    btnDownloadShareTorrent.addEventListener('click', () => {
+      if (activeShareInfoHash) {
+        window.exportTorrentFile(activeShareInfoHash);
+      }
+    });
+  }
+
+  // Drag and Drop files or folders directly into the create source selector
+  const createSourceSelector = document.querySelector('.create-source-selector');
+  if (createSourceSelector) {
+    createSourceSelector.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      createSourceSelector.classList.add('drag-over');
+    });
+    createSourceSelector.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      createSourceSelector.classList.remove('drag-over');
+    });
+    createSourceSelector.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      createSourceSelector.classList.remove('drag-over');
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        const file = e.dataTransfer.files[0];
+        const filePath = file.path;
+        if (filePath) {
+          try {
+            let isDir = false;
+            let fileSize = file.size || 0;
+            if (typeof require !== 'undefined') {
+              const fs = require('fs');
+              const s = fs.statSync(filePath);
+              isDir = s.isDirectory();
+              if (!isDir) fileSize = s.size;
+            }
+            selectedCreateSource = {
+              path: filePath,
+              name: file.name,
+              isDirectory: isDir,
+              size: fileSize
+            };
+            const typeBadge = isDir ? '<span class="source-badge">DIRECTORY</span>' : '<span class="source-badge">FILE</span>';
+            const sizeInfo = isDir ? 'All sub-files & folders auto-included' : formatBytes(fileSize);
+            createSourcePreview.innerHTML = `
+              <div class="source-selected-info">
+                <div>
+                  ${typeBadge}
+                  <strong style="margin-left: 6px; color: #0F172A;">${file.name}</strong>
+                  <div style="font-size: 11px; color: #64748B; margin-top: 2px;">📁 ${filePath} (${sizeInfo})</div>
+                </div>
+              </div>
+            `;
+            if (createTorrentNameInput && !createTorrentNameInput.value.trim()) {
+              createTorrentNameInput.value = file.name;
+            }
+            if (btnSubmitCreate) btnSubmitCreate.disabled = false;
+          } catch (err) {
+            console.warn('Drop error:', err);
+          }
+        }
+      }
+    });
+  }
 
   if (btnSubmitCreate) {
     btnSubmitCreate.addEventListener('click', async () => {
@@ -1107,6 +1276,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         if (created) {
           renderTorrentCard(created);
+          // Automatically open the Share Modal for immediate 1-click Magnet & .torrent access!
+          openShareModal(created.infoHash);
         }
       } catch (err) {
         alert(`Could not create torrent:\n${err.message || err}`);
@@ -1580,6 +1751,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         <div class="compact-actions">
           ${filesToggleBtn}
+          <button class="btn btn-secondary btn-sm btn-share-card" onclick="openShareModal('${merged.infoHash}')" title="Share this torrent (Get Magnet Link & Export .torrent)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+            <span>Share</span>
+          </button>
           ${myTorrentActionsHTML}
           <button class="btn btn-secondary btn-sm" id="btn-location-${merged.infoHash}" onclick="setLocationTorrent('${merged.infoHash}')" title="Set New Location" ${isBusy ? 'disabled' : ''}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>

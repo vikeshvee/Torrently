@@ -312,11 +312,27 @@ ipcMain.handle('export-torrent-file', async (event, { infoHash, defaultName }) =
   });
 
   if (!saveResult.canceled && saveResult.filePath) {
-    if (torrent.torrentFile && Buffer.isBuffer(torrent.torrentFile)) {
-      fs.writeFileSync(saveResult.filePath, torrent.torrentFile);
-      return true;
+    let torrentBuf = null;
+    if (torrent.torrentFile) {
+      torrentBuf = Buffer.from(torrent.torrentFile);
     } else if (torrent.torrentFileBase64) {
-      fs.writeFileSync(saveResult.filePath, Buffer.from(torrent.torrentFileBase64, 'base64'));
+      torrentBuf = Buffer.from(torrent.torrentFileBase64, 'base64');
+    } else if (torrent.downloadPath && fs.existsSync(torrent.downloadPath)) {
+      try {
+        const createTorrentModule = await import('create-torrent');
+        const createTorrent = createTorrentModule.default || createTorrentModule;
+        torrentBuf = await new Promise((res) => {
+          createTorrent(torrent.downloadPath, { name: torrent.name, announce: torrent.announce }, (err, buf) => {
+            res(buf ? Buffer.from(buf) : null);
+          });
+        });
+      } catch (e) {
+        console.warn('[Torrently] Dynamic .torrent generation note:', e.message);
+      }
+    }
+
+    if (torrentBuf && torrentBuf.length > 0) {
+      fs.writeFileSync(saveResult.filePath, torrentBuf);
       return true;
     } else {
       const content = torrent.magnetURI || `magnet:?xt=urn:btih:${torrent.infoHash}`;
@@ -325,6 +341,25 @@ ipcMain.handle('export-torrent-file', async (event, { infoHash, defaultName }) =
     }
   }
   return false;
+});
+
+ipcMain.handle('get-torrent-share-info', async (event, infoHash) => {
+  if (!engine) return null;
+  const t = engine.torrents.get(infoHash);
+  if (!t) return null;
+  const meta = engine.formatTorrentMeta(t);
+  return {
+    infoHash: t.infoHash,
+    name: t.name,
+    magnetURI: meta.magnetURI || (t.infoHash ? `magnet:?xt=urn:btih:${t.infoHash}&dn=${encodeURIComponent(t.name || 'download')}` : ''),
+    length: meta.length || 0,
+    totalSizeText: meta.totalSizeText || '0 B',
+    isMultiFile: meta.isMultiFile,
+    filesCount: (meta.files && meta.files.length) || 1,
+    numPeers: meta.numPeers || 0,
+    isMyTorrent: meta.isMyTorrent,
+    trackers: t.announce || []
+  };
 });
 
 ipcMain.handle('run-network-speed-test', async () => {

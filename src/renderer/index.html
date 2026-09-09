@@ -87,9 +87,13 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             <span>Open .torrent</span>
           </button>
-          <button class="btn btn-primary" id="btn-add-magnet">
+          <button class="btn btn-secondary" id="btn-add-magnet">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
             <span>Add Magnet Link</span>
+          </button>
+          <button class="btn btn-primary" id="btn-top-share" title="Share files or folders with decentralized swarm" style="background: linear-gradient(135deg, #0284C7, #2563EB); border: none;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+            <span>Share Files / Folders</span>
           </button>
         </div>
       </header>
@@ -459,6 +463,80 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
           <span>Create & Start Seeding</span>
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Share Torrent & Content -->
+  <div class="modal-backdrop" id="share-modal">
+    <div class="modal-card share-modal-card">
+      <div class="modal-header">
+        <div class="modal-title-row">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+          <h3 style="margin-left: 8px; font-size: 15px; font-weight: 700; color: #0F172A;">Share Torrent & Content</h3>
+        </div>
+        <button class="btn-close-modal" id="btn-close-share-modal" title="Close dialog">&times;</button>
+      </div>
+
+      <div class="modal-body share-modal-body">
+        <div class="share-info-card">
+          <div class="share-info-header">
+            <span class="share-badge-pill" id="share-source-badge">SEEDING SOURCE</span>
+            <h4 class="share-torrent-title" id="share-modal-title">Torrent Name</h4>
+          </div>
+          <div class="share-meta-row">
+            <span id="share-modal-size">0 B</span> • 
+            <span id="share-modal-files">1 file</span> • 
+            <span id="share-modal-nodes">0 connected nodes</span>
+          </div>
+        </div>
+
+        <!-- Section 1: Magnet Link -->
+        <div class="share-section">
+          <label class="form-label" style="font-weight: 600; display: flex; justify-content: space-between; align-items: center;">
+            <span>🧲 Magnet URI (Share with anyone on the internet)</span>
+            <span class="copy-success-badge" id="magnet-copy-badge" style="display: none; color: #10B981; font-weight: 600; font-size: 11px;">✓ Copied to clipboard!</span>
+          </label>
+          <div class="share-input-group">
+            <input type="text" class="form-input share-input" id="share-magnet-input" readonly placeholder="Generating Magnet Link...">
+            <button class="btn btn-primary" id="btn-copy-share-magnet">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <span>Copy Magnet Link</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Section 2: .torrent File Export -->
+        <div class="share-section" style="margin-top: 14px;">
+          <label class="form-label" style="font-weight: 600;">📄 Save .torrent File</label>
+          <div class="share-torrent-action-box">
+            <p style="font-size: 12px; color: var(--text-muted); margin: 0 0 8px 0;">
+              Export a valid, standalone binary <code>.torrent</code> file to your computer to upload to indexers, web trackers, or send to friends.
+            </p>
+            <button class="btn btn-secondary" id="btn-download-share-torrent" style="display: inline-flex; align-items: center; gap: 6px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span>Export .torrent File to Computer</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Section 3: InfoHash -->
+        <div class="share-section" style="margin-top: 14px;">
+          <label class="form-label" style="font-weight: 600; display: flex; justify-content: space-between; align-items: center;">
+            <span>🔑 BitTorrent InfoHash</span>
+            <span class="copy-success-badge" id="hash-copy-badge" style="display: none; color: #10B981; font-weight: 600; font-size: 11px;">✓ Copied!</span>
+          </label>
+          <div class="share-input-group">
+            <input type="text" class="form-input share-input" id="share-infohash-input" readonly style="font-family: monospace; font-size: 11px;">
+            <button class="btn btn-secondary" id="btn-copy-share-hash">
+              <span>Copy Hash</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; padding-top: 14px; border-top: 1px solid var(--border-color);">
+        <button class="btn btn-secondary" id="btn-close-share-done">Done</button>
       </div>
     </div>
   </div>

@@ -1602,3 +1602,103 @@ body.resizing-columns {
   font-weight: 700;
   color: #2563EB;
 }
+
+/* Drag and Drop hover highlight on Create Source */
+.create-source-selector.drag-over {
+  border-color: #2563EB !important;
+  background: #EFF6FF !important;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
+
+/* Share Modal Styling */
+.share-modal-card {
+  width: 580px;
+  max-width: 95vw;
+}
+
+.share-info-card {
+  background: #F8FAFC;
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.share-info-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.share-badge-pill {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  background: #E0F2FE;
+  color: #0369A1;
+  border: 1px solid #BAE6FD;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  letter-spacing: 0.3px;
+}
+
+.share-torrent-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0F172A;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-meta-row {
+  font-size: 12px;
+  color: #64748B;
+}
+
+.share-section {
+  margin-top: 14px;
+}
+
+.share-input-group {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.share-input {
+  flex: 1;
+  background: #F1F5F9;
+  border: 1px solid #CBD5E1;
+  color: #1E293B;
+  font-size: 12px;
+}
+
+.share-input:focus {
+  background: #FFFFFF;
+}
+
+.share-torrent-action-box {
+  background: #F8FAFC;
+  border: 1px dashed #CBD5E1;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.btn-share-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #EFF6FF !important;
+  color: #1D4ED8 !important;
+  border-color: #BFDBFE !important;
+  font-weight: 600;
+}
+
+.btn-share-card:hover {
+  background: #DBEAFE !important;
+  border-color: #93C5FD !important;
+}
+
