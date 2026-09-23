@@ -15,7 +15,7 @@
     "icon": "electron scripts/generate-icon.js",
     "dist": "electron-builder --mac dmg zip --arm64",
     "dist:dmg": "electron-builder --mac dmg --arm64",
-    "dist:deb": "electron-builder --linux deb --x64 -c.npmRebuild=false",
+    "dist:deb": "node scripts/build-deb.js",
     "dist:dir": "electron-builder --dir --arm64"
   },
   "keywords": [
