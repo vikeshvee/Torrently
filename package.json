@@ -15,7 +15,7 @@
     "icon": "electron scripts/generate-icon.js",
     "dist": "electron-builder --mac dmg zip --arm64",
     "dist:dmg": "electron-builder --mac dmg --arm64",
-    "dist:deb": "electron-builder --linux deb --arm64",
+    "dist:deb": "electron-builder --linux deb --x64 -c.npmRebuild=false",
     "dist:dir": "electron-builder --dir --arm64"
   },
   "keywords": [
@@ -104,9 +104,15 @@
     },
     "linux": {
       "target": [
-        "deb"
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
-      "category": "Network"
+      "category": "Network",
+      "maintainer": "vikeshvee <vikeshvee@gmail.com>"
     },
     "deb": {
       "priority": "optional",

@@ -75,10 +75,11 @@ test('Speed monitor header does not overlap macOS traffic light window controls'
   assert.strictEqual(monCss.includes('padding-left: 78px;'), true, 'Network monitor header must have 78px left padding for traffic lights');
 });
 
-test('Package.json includes Debian target and dist:deb script', () => {
+test('Package.json includes Debian target and dist:deb script for Intel x64', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
-  assert.strictEqual(pkg.scripts['dist:deb'], 'electron-builder --linux deb --arm64');
-  assert.deepStrictEqual(pkg.build.linux.target, ['deb']);
+  assert.strictEqual(pkg.scripts['dist:deb'], 'electron-builder --linux deb --x64 -c.npmRebuild=false');
+  assert.strictEqual(pkg.build.linux.target[0].target, 'deb');
+  assert.deepStrictEqual(pkg.build.linux.target[0].arch, ['x64']);
 });
 
 test('Version number, in-app README section, and release key points are displayed in app', () => {
