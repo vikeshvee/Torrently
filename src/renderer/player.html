@@ -88,6 +88,23 @@
       -webkit-app-region: no-drag;
     }
 
+    .mode-select {
+      background: rgba(30, 41, 59, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      color: #E2E8F0;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 5px 8px;
+      border-radius: 6px;
+      outline: none;
+      cursor: pointer;
+      transition: border-color 0.15s ease;
+    }
+
+    .mode-select:focus, .mode-select:hover {
+      border-color: #3B82F6;
+    }
+
     .btn-vlc {
       display: inline-flex;
       align-items: center;
@@ -109,6 +126,27 @@
       color: #FFFFFF;
     }
 
+    .btn-window-close {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      color: #E2E8F0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+      margin-left: 4px;
+    }
+
+    .btn-window-close:hover {
+      background: rgba(239, 68, 68, 0.25);
+      border-color: rgba(239, 68, 68, 0.5);
+      color: #EF4444;
+    }
+
     .video-viewport {
       flex: 1;
       position: relative;
@@ -127,12 +165,79 @@
       background: #000000;
     }
 
+    /* Floating Jump HUD */
+    .jump-hud {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(8px);
+      padding: 4px 8px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+      z-index: 20;
+    }
+
+    .video-viewport:hover .jump-hud {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .jump-btn {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #CBD5E1;
+      font-size: 11px;
+      font-weight: 600;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 3px 7px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .jump-btn:hover {
+      background: rgba(59, 130, 246, 0.3);
+      border-color: #3B82F6;
+      color: #FFFFFF;
+    }
+
+    /* Jump Toast */
+    .jump-toast {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #FFFFFF;
+      padding: 10px 20px;
+      border-radius: 9999px;
+      font-size: 14px;
+      font-weight: 600;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      z-index: 30;
+    }
+
+    .jump-toast.show {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1.05);
+    }
+
     /* Codec / error message overlay */
     .codec-notice {
       position: absolute;
       bottom: 24px;
-      background: rgba(15, 23, 42, 0.9);
-      border: 1px solid rgba(239, 68, 68, 0.3);
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(245, 158, 11, 0.4);
       border-radius: 8px;
       padding: 12px 18px;
       display: none;
@@ -140,7 +245,7 @@
       gap: 12px;
       max-width: 90%;
       box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
-      z-index: 10;
+      z-index: 25;
     }
 
     .codec-notice.active {
@@ -162,9 +267,18 @@
       <span class="media-title" id="player-title-text">Torrent Stream</span>
     </div>
     <div class="actions-bar">
-      <button class="btn-vlc" id="btn-vlc-external" title="Open Stream in External Player (VLC, IINA, MPV)">
+      <select id="stream-mode-select" class="mode-select" title="Playback & Transcode Engine">
+        <option value="auto">⚡ Auto (FFmpeg AC3/HEVC)</option>
+        <option value="full">🔄 Full Transcode (H.264+AAC)</option>
+        <option value="remux">🚀 Fast Remux (AAC Audio)</option>
+        <option value="raw">📦 Raw Direct Stream</option>
+      </select>
+      <button class="btn-vlc" id="btn-vlc-external" title="Open Stream in External Player (VLC, IINA, MPV) [Shortcut: V]">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
         <span>Open in VLC / IINA</span>
+      </button>
+      <button class="btn-window-close" onclick="window.close()" title="Close Player Window">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
   </div>
@@ -173,22 +287,36 @@
   <div class="video-viewport">
     <video id="player-video" controls autoplay crossorigin="anonymous" playsinline></video>
 
+    <div class="jump-hud">
+      <button class="jump-btn" id="btn-jump-back-60">-60s</button>
+      <button class="jump-btn" id="btn-jump-back-10">-10s</button>
+      <button class="jump-btn" id="btn-jump-fwd-10">+10s</button>
+      <button class="jump-btn" id="btn-jump-fwd-60">+60s</button>
+    </div>
+
+    <div class="jump-toast" id="jump-toast"></div>
+
     <div class="codec-notice" id="codec-warning">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-      <div class="codec-desc">
-        This video uses a specialized codec (AC3 / HEVC / AVI). If video or audio doesn't play directly, open it in VLC or IINA.
+      <div class="codec-desc" id="codec-desc-text">
+        This file uses an advanced codec (AC3 / DTS / HEVC / AVI). Stream has been adapted for playback, or you can open it in VLC / IINA.
       </div>
       <button class="btn-vlc" id="btn-vlc-inline" style="background: #2563EB; border: none; color: white;">Open VLC</button>
     </div>
   </div>
 
   <script>
+    let baseRawUrl = '';
     let currentStreamUrl = '';
+    let activeMode = 'auto';
     const video = document.getElementById('player-video');
     const titleText = document.getElementById('player-title-text');
     const codecWarning = document.getElementById('codec-warning');
+    const codecDescText = document.getElementById('codec-desc-text');
+    const modeSelect = document.getElementById('stream-mode-select');
     const btnVlc = document.getElementById('btn-vlc-external');
     const btnVlcInline = document.getElementById('btn-vlc-inline');
+    const jumpToast = document.getElementById('jump-toast');
 
     let ipc = null;
     try {
@@ -231,20 +359,16 @@
       }
     }
 
-    // Restore on initial player window load
     restoreAudioSettings();
 
-    // Listen for volume and mute adjustments made by user
     video.addEventListener('volumechange', () => {
       saveAudioSettings();
     });
 
-    // Re-apply when stream metadata loads to prevent browser resets
     video.addEventListener('loadedmetadata', () => {
       restoreAudioSettings();
     });
 
-    // Sync from main process preferences if available
     if (ipc) {
       ipc.invoke('get-player-audio-settings').then(settings => {
         if (settings && typeof settings.volume === 'number') {
@@ -258,28 +382,123 @@
       }).catch(() => {});
     }
 
+    function showToast(text) {
+      jumpToast.textContent = text;
+      jumpToast.classList.add('show');
+      clearTimeout(jumpToast._timer);
+      jumpToast._timer = setTimeout(() => {
+        jumpToast.classList.remove('show');
+      }, 900);
+    }
+
+    function applyStreamMode(mode, seekOffset = 0) {
+      activeMode = mode;
+      modeSelect.value = mode;
+      if (!baseRawUrl) return;
+
+      let targetUrl = baseRawUrl;
+      try {
+        const u = new URL(baseRawUrl);
+        u.searchParams.delete('transcode');
+        u.searchParams.delete('raw');
+        u.searchParams.delete('mode');
+        u.searchParams.delete('start');
+
+        if (mode === 'raw') {
+          u.searchParams.set('raw', '1');
+        } else if (mode === 'full') {
+          u.searchParams.set('transcode', '1');
+          u.searchParams.set('mode', 'full');
+        } else if (mode === 'remux') {
+          u.searchParams.set('transcode', '1');
+          u.searchParams.set('mode', 'remux');
+        } else {
+          // 'auto' - stream server will auto-detect AC3/HEVC/AVI or serve stream
+        }
+
+        if (seekOffset > 0) {
+          u.searchParams.set('start', Math.floor(seekOffset).toString());
+        }
+
+        targetUrl = u.toString();
+      } catch (e) {
+        targetUrl = baseRawUrl;
+      }
+
+      currentStreamUrl = targetUrl;
+      const prevTime = seekOffset || (video.currentTime || 0);
+
+      video.src = targetUrl;
+      restoreAudioSettings();
+      video.load();
+      restoreAudioSettings();
+
+      if (seekOffset === 0 && prevTime > 1) {
+        video.currentTime = prevTime;
+      }
+
+      video.play().catch(err => {
+        console.warn('Playback autoplay note:', err.message);
+      });
+    }
+
+    modeSelect.addEventListener('change', () => {
+      applyStreamMode(modeSelect.value);
+    });
+
     function loadMediaStream(url, title) {
       if (!url) return;
+      baseRawUrl = url;
       currentStreamUrl = url;
+
       if (title) {
         titleText.textContent = title;
         document.title = `${title} — Torrently Player`;
       }
 
       codecWarning.classList.remove('active');
-      video.onerror = null;
-      video.src = url;
-      restoreAudioSettings();
-      video.load();
-      restoreAudioSettings();
-      video.play().catch(err => {
-        console.warn('Playback autoplay note:', err.message);
-      });
 
-      video.onerror = () => {
-        codecWarning.classList.add('active');
+      const isSpecialCodec = title && (
+        /\.(avi|divx|wmv|flv|ts|vob|m2ts|mts|mpg|mpeg)$/i.test(title) ||
+        /[\.\-_](ac3|eac3|dts|dtshd|hevc|h265|x265|10bit|xvid|divx)[\.\-_]/i.test(title)
+      );
+
+      if (isSpecialCodec) {
+        codecDescText.textContent = 'Universal transcoding is active for AC3 / HEVC / AVI. Video is streamed smoothly with FFmpeg.';
+      }
+
+      video.onerror = (e) => {
+        console.warn('Media element error occurred, attempting automatic recovery:', e);
+        if (activeMode !== 'full') {
+          showToast('⚡ Auto-switching to FFmpeg Transcode...');
+          applyStreamMode('full', video.currentTime || 0);
+        } else {
+          codecDescText.textContent = 'Playback error: Chromium could not decode this stream directly. Click below to open in VLC or IINA.';
+          codecWarning.classList.add('active');
+        }
       };
+
+      applyStreamMode('auto');
     }
+
+    function jump(seconds) {
+      if (!video) return;
+      const newTime = Math.max(0, (video.currentTime || 0) + seconds);
+      video.currentTime = newTime;
+      showToast((seconds > 0 ? `+${seconds}s` : `${seconds}s`) + ` (${formatTime(newTime)})`);
+    }
+
+    function formatTime(sec) {
+      const s = Math.floor(sec || 0);
+      const m = Math.floor(s / 60);
+      const rem = s % 60;
+      return `${m}:${rem.toString().padStart(2, '0')}`;
+    }
+
+    document.getElementById('btn-jump-back-60').addEventListener('click', () => jump(-60));
+    document.getElementById('btn-jump-back-10').addEventListener('click', () => jump(-10));
+    document.getElementById('btn-jump-fwd-10').addEventListener('click', () => jump(10));
+    document.getElementById('btn-jump-fwd-60').addEventListener('click', () => jump(60));
 
     // Read initial URL params
     const params = new URLSearchParams(window.location.search);
@@ -299,15 +518,25 @@
     }
 
     async function openInExternal() {
-      if (!currentStreamUrl) return;
+      const exportUrl = baseRawUrl || currentStreamUrl;
+      if (!exportUrl) return;
+
+      // Pass raw stream so external players like VLC get full original bitstream
+      let vlcTargetUrl = exportUrl;
+      try {
+        const u = new URL(exportUrl);
+        u.searchParams.set('raw', '1');
+        vlcTargetUrl = u.toString();
+      } catch (e) {}
+
       if (ipc) {
         try {
-          await ipc.invoke('open-external-player', currentStreamUrl);
-          return;
+          const opened = await ipc.invoke('open-external-player', vlcTargetUrl);
+          if (opened) return;
         } catch (e) {}
       }
-      navigator.clipboard.writeText(currentStreamUrl);
-      alert(`Stream link copied to clipboard for VLC / IINA:\n${currentStreamUrl}`);
+      navigator.clipboard.writeText(vlcTargetUrl);
+      alert(`Direct stream URL copied to clipboard for VLC / IINA:\n${vlcTargetUrl}`);
     }
 
     if (btnVlc) btnVlc.addEventListener('click', openInExternal);
@@ -319,6 +548,22 @@
         e.preventDefault();
         if (video.paused) video.play();
         else video.pause();
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        jump(e.shiftKey ? -60 : -10);
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        jump(e.shiftKey ? 60 : 10);
+      } else if (e.code === 'ArrowUp') {
+        e.preventDefault();
+        video.volume = Math.min(1, video.volume + 0.1);
+        showToast(`Volume: ${Math.round(video.volume * 100)}%`);
+      } else if (e.code === 'ArrowDown') {
+        e.preventDefault();
+        video.volume = Math.max(0, video.volume - 0.1);
+        showToast(`Volume: ${Math.round(video.volume * 100)}%`);
+      } else if (e.code === 'KeyV') {
+        openInExternal();
       } else if (e.code === 'KeyF') {
         if (!document.fullscreenElement) {
           document.documentElement.requestFullscreen().catch(() => {});
@@ -327,6 +572,7 @@
         }
       } else if (e.code === 'KeyM') {
         video.muted = !video.muted;
+        showToast(video.muted ? 'Muted' : 'Unmuted');
       } else if (e.code === 'Escape' || e.key === 'Escape') {
         if (document.fullscreenElement) {
           document.exitFullscreen().catch(() => {});

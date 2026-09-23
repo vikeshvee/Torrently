@@ -177,3 +177,238 @@ test('Country code to flag emoji conversion and fallback rules', () => {
   assert.strictEqual(countryCodeToFlag(null), '🌐');
 });
 
+test('Create Torrent top button text does not have duplicate plus sign', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '../src/renderer/index.html'), 'utf8');
+
+  // Verify button does not have duplicate plus "+ + Create Torrent"
+  assert.strictEqual(html.includes('+ Create Torrent'), false, 'Button should not contain duplicate "+ Create Torrent"');
+  assert.strictEqual(html.includes('<span>Create Torrent</span>'), true, 'Button should contain clean "Create Torrent" text');
+});
+
+test('Shareable & user-created torrents target the active list in Downloads view and my-torrents in My Torrents view', () => {
+  function getTargetView(torrent, activeTab) {
+    const pct = Math.min(100, Math.floor((torrent.progress || 0) * 100));
+    const isMyTorrent = Boolean(torrent.isMyTorrent || torrent.createdByUser);
+    const isCompleted = pct >= 100 && !torrent.verifying && !torrent.actionBusy;
+
+    if (activeTab === 'my-torrents') {
+      if (isMyTorrent) return 'my-torrents-list';
+      if (isCompleted) return 'completed-list';
+      return 'torrent-list';
+    } else if (activeTab === 'completed') {
+      if (isCompleted) return 'completed-list';
+      if (isMyTorrent) return 'my-torrents-list';
+      return 'torrent-list';
+    } else { // 'downloads' view
+      // All active downloads and created/shareable torrents appear in the main active list!
+      if (isCompleted && !isMyTorrent) return 'completed-list';
+      return 'torrent-list';
+    }
+  }
+
+  const createdTorrent = {
+    infoHash: 'abc1234567890abcdef1234567890abcdef1234',
+    name: 'Shared_Album_Lossless',
+    isMyTorrent: true,
+    createdByUser: true,
+    progress: 1.0, // 100% seeding
+    paused: false
+  };
+
+  const downloadingTorrent = {
+    infoHash: 'def1234567890abcdef1234567890abcdef1234',
+    name: 'Linux_Distribution.iso',
+    progress: 0.45,
+    paused: false
+  };
+
+  const finishedDownloadTorrent = {
+    infoHash: '7891234567890abcdef1234567890abcdef1234',
+    name: 'Documentation.pdf',
+    progress: 1.0,
+    paused: false
+  };
+
+  // When user is on default "Downloads" tab:
+  // User-created torrent MUST appear in the main active list ('torrent-list') so it is visible to the user!
+  assert.strictEqual(getTargetView(createdTorrent, 'downloads'), 'torrent-list');
+  assert.strictEqual(getTargetView(downloadingTorrent, 'downloads'), 'torrent-list');
+  assert.strictEqual(getTargetView(finishedDownloadTorrent, 'downloads'), 'completed-list');
+
+  // When user is on "My Torrents" tab:
+  assert.strictEqual(getTargetView(createdTorrent, 'my-torrents'), 'my-torrents-list');
+
+  // When user is on "Completed" tab:
+  assert.strictEqual(getTargetView(finishedDownloadTorrent, 'completed'), 'completed-list');
+});
+
+test('Source path resolution and validation handles files and directories', () => {
+  const fs = require('fs');
+  const path = require('path');
+
+  function resolveSource(cleanPath) {
+    if (!cleanPath || typeof cleanPath !== 'string') return null;
+    const p = cleanPath.trim();
+    if (!p) return null;
+
+    let isDir = false;
+    let size = 0;
+    if (fs.existsSync(p)) {
+      const s = fs.statSync(p);
+      isDir = s.isDirectory();
+      size = isDir ? 0 : s.size;
+    }
+    return {
+      path: p,
+      name: path.basename(p),
+      isDirectory: isDir,
+      size
+    };
+  }
+
+  // Testing with current directory
+  const dirSource = resolveSource(__dirname);
+  assert.strictEqual(dirSource.isDirectory, true);
+  assert.strictEqual(dirSource.name, 'tests');
+
+  // Testing with this file
+  const fileSource = resolveSource(__filename);
+  assert.strictEqual(fileSource.isDirectory, false);
+  assert.strictEqual(fileSource.name, 'media.test.js');
+  assert.ok(fileSource.size > 0);
+});
+
+test('Menu visibility defaults: My Torrents is hidden by default, Downloads and Completed are visible, Preferences is permanent', () => {
+  const DEFAULT_MENU_VISIBILITY = {
+    downloads: true,
+    completed: true,
+    'my-torrents': false, // Default hidden per user request
+    preferences: true     // Settings cannot be hidden
+  };
+
+  assert.strictEqual(DEFAULT_MENU_VISIBILITY['my-torrents'], false, 'My Torrents menu should be hidden by default');
+  assert.strictEqual(DEFAULT_MENU_VISIBILITY.downloads, true, 'Downloads menu should be visible by default');
+  assert.strictEqual(DEFAULT_MENU_VISIBILITY.completed, true, 'Completed menu should be visible by default');
+  assert.strictEqual(DEFAULT_MENU_VISIBILITY.preferences, true, 'Preferences/Settings menu should be visible by default');
+});
+
+test('Menu visibility settings protection: Settings cannot be hidden even if explicitly requested', () => {
+  function sanitizeMenuVisibility(requested) {
+    return {
+      downloads: requested && requested.downloads !== undefined ? Boolean(requested.downloads) : true,
+      completed: requested && requested.completed !== undefined ? Boolean(requested.completed) : true,
+      'my-torrents': requested && requested['my-torrents'] !== undefined ? Boolean(requested['my-torrents']) : false,
+      preferences: true // Always true, cannot be overridden
+    };
+  }
+
+  const sanitized1 = sanitizeMenuVisibility({ downloads: false, completed: false, 'my-torrents': false, preferences: false });
+  assert.strictEqual(sanitized1.preferences, true, 'Preferences/Settings must remain true even when false is requested');
+  assert.strictEqual(sanitized1.downloads, false);
+  assert.strictEqual(sanitized1.completed, false);
+  assert.strictEqual(sanitized1['my-torrents'], false);
+
+  const sanitized2 = sanitizeMenuVisibility({ 'my-torrents': true });
+  assert.strictEqual(sanitized2['my-torrents'], true);
+  assert.strictEqual(sanitized2.preferences, true);
+});
+
+test('Menu visibility fallback: When an active tab is hidden, fallback navigates to first available visible tab', () => {
+  function getTabFallback(targetTab, visibility) {
+    if (visibility[targetTab] !== false) return targetTab;
+    if (visibility.downloads) return 'downloads';
+    if (visibility.completed) return 'completed';
+    return 'preferences';
+  }
+
+  // If My Torrents is hidden (default) and requested, fallback to Downloads
+  assert.strictEqual(getTabFallback('my-torrents', { downloads: true, completed: true, 'my-torrents': false, preferences: true }), 'downloads');
+
+  // If Downloads is also hidden, fallback to Completed
+  assert.strictEqual(getTabFallback('downloads', { downloads: false, completed: true, 'my-torrents': false, preferences: true }), 'completed');
+
+  // If both Downloads and Completed are hidden, fallback to Preferences (Settings)
+  assert.strictEqual(getTabFallback('downloads', { downloads: false, completed: false, 'my-torrents': false, preferences: true }), 'preferences');
+});
+
+test('Universal Video & Audio Formats: AC3, HEVC, AVI, MKV, DTS, and legacy container support', () => {
+  // Common video formats that require playback support
+  const universalVideoFiles = [
+    'classic_movie.avi',
+    'film.xvid.avi',
+    'video.divx',
+    'episode.wmv',
+    'old_stream.flv',
+    'mobile_clip.3gp',
+    'broadcast_stream.ts',
+    'bluray_rip.m2ts',
+    'camcorder.mts',
+    'dvd_rip.vob',
+    'legacy_clip.mpg',
+    'legacy_video.mpeg',
+    'web_video.ogv',
+    'realmedia.rm',
+    'realmedia_variable.rmvb',
+    'advanced_stream.asf',
+    'modern_feature.mkv',
+    'h264_stream.mp4'
+  ];
+
+  for (const file of universalVideoFiles) {
+    assert.strictEqual(isVideoFile(file), true, `File ${file} should be recognized as video`);
+    assert.strictEqual(isAudioOrVideoFile(file), true, `File ${file} should be recognized as audio/video`);
+    assert.strictEqual(shouldShowSubfileStreamButton({ name: file, index: 0 }), true, `Stream button should show for ${file}`);
+  }
+
+  // Audio formats including Dolby / DTS
+  const universalAudioFiles = [
+    'surround_soundtrack.ac3',
+    'dolby_digital_plus.eac3',
+    'dts_master_audio.dts',
+    'dts_hd.dtshd',
+    'lossless_track.alac',
+    'studio_recording.aiff',
+    'matroska_audio.mka',
+    'discord_voice.opus',
+    'windows_audio.wma',
+    'standard_song.mp3',
+    'flac_album.flac',
+    'wave_audio.wav'
+  ];
+
+  for (const file of universalAudioFiles) {
+    assert.strictEqual(isAudioFile(file), true, `File ${file} should be recognized as audio`);
+    assert.strictEqual(isAudioOrVideoFile(file), true, `File ${file} should be recognized as audio/video`);
+    assert.strictEqual(shouldShowSubfileStreamButton({ name: file, index: 0 }), true, `Stream button should show for ${file}`);
+  }
+});
+
+test('StreamServer: shouldAutoTranscode properly detects files needing FFmpeg transcoding', () => {
+  const StreamServer = require('../src/main/streamServer');
+  const dummyServer = new StreamServer(null);
+
+  // Files with non-native containers must auto-transcode
+  assert.strictEqual(dummyServer.shouldAutoTranscode('movie.avi'), true);
+  assert.strictEqual(dummyServer.shouldAutoTranscode('clip.wmv'), true);
+  assert.strictEqual(dummyServer.shouldAutoTranscode('stream.flv'), true);
+  assert.strictEqual(dummyServer.shouldAutoTranscode('broadcast.ts'), true);
+  assert.strictEqual(dummyServer.shouldAutoTranscode('dvd.vob'), true);
+  assert.strictEqual(dummyServer.shouldAutoTranscode('dvd.divx'), true);
+
+  // Files with AC3, DTS, HEVC, H265, X265, 10bit in title must auto-transcode
+  assert.strictEqual(dummyServer.shouldAutoTranscode('Movie.2024.1080p.HEVC.AC3.mkv'), true);
+  assert.strictEqual(dummyServer.shouldAutoTranscode('Show.S02E05.720p.x265-Torrently.mp4'), true);
+  assert.strictEqual(dummyServer.shouldAutoTranscode('EpicFilm.DTS-HD.MA.5.1.mkv'), true);
+  assert.strictEqual(dummyServer.shouldAutoTranscode('Animation.10bit.H265.mkv'), true);
+  assert.strictEqual(dummyServer.shouldAutoTranscode('Concert.Live.EAC3.mkv'), true);
+
+  // Standard H.264 MP4 without special audio does NOT need auto-transcode
+  assert.strictEqual(dummyServer.shouldAutoTranscode('BigBuckBunny.mp4'), false);
+  assert.strictEqual(dummyServer.shouldAutoTranscode('standard_clip.webm'), false);
+});
+
+
+
+

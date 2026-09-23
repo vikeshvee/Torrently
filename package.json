@@ -3,13 +3,19 @@
   "version": "1.0.0",
   "description": "Cross-platform desktop torrent client with instant video streaming while downloading",
   "main": "src/main/index.js",
+  "bin": {
+    "torrently": "bin/torrently"
+  },
   "scripts": {
-    "start": "electron .",
-    "dev": "electron .",
-    "test": "node --test tests/*.test.js",
+    "start": "node scripts/run-sandbox.js",
+    "start:raw": "electron .",
+    "dev": "node scripts/run-sandbox.js",
+    "cli": "node bin/torrently",
+    "test": "node scripts/test-sandbox.js",
     "icon": "electron scripts/generate-icon.js",
     "dist": "electron-builder --mac dmg zip --arm64",
     "dist:dmg": "electron-builder --mac dmg --arm64",
+    "dist:deb": "electron-builder --linux deb --arm64",
     "dist:dir": "electron-builder --dir --arm64"
   },
   "keywords": [
@@ -25,6 +31,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
+    "ffmpeg-static": "^5.3.0",
     "webtorrent": "^3.0.21"
   },
   "devDependencies": {
@@ -39,8 +46,12 @@
       "output": "dist",
       "buildResources": "build"
     },
+    "asarUnpack": [
+      "**/node_modules/ffmpeg-static/**/*"
+    ],
     "files": [
       "src/**/*",
+      "bin/**/*",
       "package.json",
       "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
       "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
@@ -58,11 +69,15 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["arm64"]
+          "arch": [
+            "arm64"
+          ]
         },
         {
           "target": "zip",
-          "arch": ["arm64"]
+          "arch": [
+            "arm64"
+          ]
         }
       ]
     },
@@ -86,6 +101,16 @@
         "width": 540,
         "height": 380
       }
+    },
+    "linux": {
+      "target": [
+        "deb"
+      ],
+      "category": "Network"
+    },
+    "deb": {
+      "priority": "optional",
+      "packageCategory": "net"
     },
     "fileAssociations": [
       {

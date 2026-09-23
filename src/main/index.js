@@ -1,15 +1,58 @@
-const { app, BrowserWindow, ipcMain, shell, dialog, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, Notification, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const TorrentEngine = require('./engine');
 const StreamServer = require('./streamServer');
 const { parseTorrentMetadata } = require('./bencode');
 const { expandPath } = require('./paths');
+const NetworkMonitor = require('./networkMonitor');
+const cliInstaller = require('./cliInstaller');
 
 let mainWindow;
 let engine;
 let streamServer;
+let networkMonitor;
+let monitorWindow = null;
+let statusTray = null;
+let playerWindow = null;
 const pendingFilesToOpen = [];
+
+// Protect against transient Electron object destruction or disposal during window reload / close
+process.on('uncaughtException', (err) => {
+  if (err && err.message && (
+    err.message.includes('Object has been destroyed') ||
+    err.message.includes('Render frame was disposed')
+  )) {
+    return;
+  }
+  console.error('[Torrently] Uncaught exception:', err);
+});
+
+// Enable platform hardware HEVC decoder support in Chromium
+app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport');
+
+const isDevSandbox = process.env.TORRENTLY_DEV_SANDBOX === '1';
+if (isDevSandbox) {
+  try {
+    app.setName('Torrently Test Sandbox');
+  } catch (e) {}
+}
+
+// Register Torrently as default handler for magnet links (skip in sandbox testing to protect production)
+if (!isDevSandbox && process.env.TORRENTLY_TEST_SANDBOX !== '1') {
+  try {
+    if (process.defaultApp) {
+      if (process.argv.length >= 2) {
+        app.setAsDefaultProtocolClient('magnet', process.execPath, [path.resolve(process.argv[1])]);
+      }
+    } else {
+      app.setAsDefaultProtocolClient('magnet');
+    }
+  } catch (e) {
+    console.warn('[Torrently] Protocol client registration note:', e.message);
+  }
+}
 
 function findTorrentArg(argv) {
   if (!Array.isArray(argv)) return null;
@@ -27,32 +70,35 @@ function findTorrentArg(argv) {
 
 function handleFileOpen(filePath) {
   if (!filePath) return;
-  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isLoading()) {
-    sendToRenderer('open-torrent-file', filePath);
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
-  } else {
-    pendingFilesToOpen.push(filePath);
-  }
-}
-
-// Single-instance lock for Windows/Linux and multiple launch routing
-const gotTheLock = app.requestSingleInstanceLock();
-if (!gotTheLock) {
-  app.quit();
-} else {
-  app.on('second-instance', (event, argv) => {
+  pendingFilesToOpen.push(filePath);
+  try {
     if (mainWindow && !mainWindow.isDestroyed()) {
+      sendToRenderer('open-torrent-file', filePath);
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
       mainWindow.focus();
     }
-    const torrentFile = findTorrentArg(argv);
-    if (torrentFile) {
-      handleFileOpen(torrentFile);
-    }
-  });
+  } catch (e) {}
+}
+
+// Single-instance lock for Windows/Linux and multiple launch routing
+const gotTheLock = isDevSandbox ? true : app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  if (!isDevSandbox) {
+    app.on('second-instance', (event, argv) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+      }
+      const torrentFile = findTorrentArg(argv);
+      if (torrentFile) {
+        handleFileOpen(torrentFile);
+      }
+    });
+  }
 }
 
 // macOS native open-file (Finder double click or drag to dock)
@@ -61,7 +107,7 @@ app.on('open-file', (event, filePath) => {
   handleFileOpen(filePath);
 });
 
-// macOS native open-url (magnet links)
+// macOS native open-url (magnet links from browser)
 app.on('open-url', (event, url) => {
   event.preventDefault();
   handleFileOpen(url);
@@ -73,6 +119,8 @@ if (initialArgTorrent) {
   pendingFilesToOpen.push(initialArgTorrent);
 }
 
+const PREFERENCES_FILE = path.join(os.homedir(), '.torrently', 'preferences.json');
+
 let preferences = {
   savePath: expandPath(path.join(app.getPath('downloads'), 'Torrently')),
   downloadLimit: 0,
@@ -81,20 +129,284 @@ let preferences = {
   playCompletionSound: true,
   showCompletionNotification: true,
   playerVolume: 1.0,
-  playerMuted: false
+  playerMuted: false,
+  showInStatusBar: false,
+  showSidebarSpeed: false,
+  enableCli: true,
+  menuVisibility: {
+    downloads: true,
+    completed: true,
+    'my-torrents': false, // Default hidden per user request
+    preferences: true     // Settings cannot be hidden
+  }
 };
 
-function sendToRenderer(channel, ...args) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    const wc = mainWindow.webContents;
-    if (wc && !wc.isDestroyed()) {
+function loadPreferences() {
+  try {
+    if (fs.existsSync(PREFERENCES_FILE)) {
+      const raw = fs.readFileSync(PREFERENCES_FILE, 'utf8');
+      const loaded = JSON.parse(raw);
+      if (loaded && typeof loaded === 'object') {
+        preferences = { ...preferences, ...loaded };
+        if (preferences.savePath) {
+          preferences.savePath = expandPath(preferences.savePath);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[Torrently] Error loading preferences file:', e.message);
+  }
+}
+
+function savePreferencesToFile() {
+  try {
+    const dir = path.dirname(PREFERENCES_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(PREFERENCES_FILE, JSON.stringify(preferences, null, 2));
+  } catch (e) {
+    console.warn('[Torrently] Error saving preferences file:', e.message);
+  }
+}
+
+// Load saved user preferences from ~/.torrently/preferences.json
+loadPreferences();
+
+function getCanonicalStatePath() {
+  const dir = path.join(os.homedir(), '.torrently');
+  if (!fs.existsSync(dir)) {
+    try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
+  }
+  return path.join(dir, 'torrently-state.json');
+}
+
+/**
+ * Merges all existing torrents from all historical locations into ~/.torrently/torrently-state.json
+ * Ensures no in-progress or paused torrent is ever lost across rebuilds, DMG reinstalls, or updates.
+ */
+function migrateAndMergeTorrentState() {
+  const canonicalPath = getCanonicalStatePath();
+  let appUserDataDir = '';
+  try { appUserDataDir = app.getPath('userData'); } catch (e) {}
+
+  const candidatePaths = [
+    canonicalPath,
+    appUserDataDir ? path.join(appUserDataDir, 'torrently-state.json') : null,
+    path.join(os.homedir(), 'Library', 'Application Support', 'Torrently', 'torrently-state.json'),
+    path.join(os.homedir(), 'Library', 'Application Support', 'torrently', 'torrently-state.json'),
+    path.join(__dirname, '../../torrently-state.json')
+  ].filter(Boolean);
+
+  const mergedMap = new Map();
+
+  for (const p of candidatePaths) {
+    if (fs.existsSync(p)) {
       try {
-        wc.send(channel, ...args);
+        const raw = fs.readFileSync(p, 'utf8');
+        const list = JSON.parse(raw);
+        if (Array.isArray(list)) {
+          for (const item of list) {
+            const key = (item.infoHash || item.torrentId || item.name || '').toLowerCase();
+            if (!key) continue;
+            if (!mergedMap.has(key)) {
+              mergedMap.set(key, item);
+            } else {
+              const existing = mergedMap.get(key);
+              // Preserve highest download progress & bytes
+              if ((item.downloaded || 0) > (existing.downloaded || 0) || (item.progress || 0) > (existing.progress || 0)) {
+                mergedMap.set(key, { ...existing, ...item });
+              }
+            }
+          }
+        }
       } catch (e) {
-        // Window or webContents destroyed concurrently
+        console.warn('[Torrently] State read note for', p, e.message);
       }
     }
   }
+
+  const mergedList = Array.from(mergedMap.values());
+  if (mergedList.length > 0) {
+    try {
+      fs.writeFileSync(canonicalPath, JSON.stringify(mergedList, null, 2));
+      // Backup to app userData as secondary copy
+      if (appUserDataDir) {
+        const userStateBackup = path.join(appUserDataDir, 'torrently-state.json');
+        if (!fs.existsSync(path.dirname(userStateBackup))) {
+          fs.mkdirSync(path.dirname(userStateBackup), { recursive: true });
+        }
+        fs.writeFileSync(userStateBackup, JSON.stringify(mergedList, null, 2));
+      }
+    } catch (e) {}
+  }
+
+  return canonicalPath;
+}
+
+function safeSend(win, channel, ...args) {
+  try {
+    if (!win) return false;
+    if (typeof win.isDestroyed === 'function' && win.isDestroyed()) return false;
+    let wc;
+    try {
+      wc = win.webContents;
+    } catch (e) {
+      return false;
+    }
+    if (!wc) return false;
+    if (typeof wc.isDestroyed === 'function' && wc.isDestroyed()) return false;
+    if (typeof wc.isLoading === 'function' && wc.isLoading()) return false;
+    wc.send(channel, ...args);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function sendToRenderer(channel, ...args) {
+  safeSend(mainWindow, channel, ...args);
+}
+
+function broadcastNetworkSpeed(snapshot) {
+  safeSend(mainWindow, 'live-network-speed', snapshot);
+  safeSend(monitorWindow, 'live-network-speed', snapshot);
+}
+
+function syncNetworkMonitorState() {
+  if (!networkMonitor) return;
+  const isSpeedNeeded = Boolean(
+    preferences.showInStatusBar ||
+    preferences.showInSidebarSpeed ||
+    (monitorWindow && !monitorWindow.isDestroyed())
+  );
+  if (isSpeedNeeded) {
+    if (typeof networkMonitor.isRunning === 'function' && !networkMonitor.isRunning()) {
+      networkMonitor.start();
+    }
+  } else {
+    if (typeof networkMonitor.isRunning === 'function' && networkMonitor.isRunning()) {
+      networkMonitor.stop();
+    }
+  }
+}
+
+async function openNetworkMonitorWindow() {
+  if (monitorWindow && !monitorWindow.isDestroyed()) {
+    if (monitorWindow.isMinimized()) monitorWindow.restore();
+    monitorWindow.show();
+    monitorWindow.focus();
+    syncNetworkMonitorState();
+    return true;
+  }
+
+  monitorWindow = new BrowserWindow({
+    width: 960,
+    height: 640,
+    minWidth: 720,
+    minHeight: 480,
+    title: 'Torrently — Network Speed Monitor & History',
+    backgroundColor: '#0B0F19',
+    titleBarStyle: 'hiddenInset',
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    }
+  });
+
+  monitorWindow.on('closed', () => {
+    monitorWindow = null;
+    syncNetworkMonitorState();
+  });
+
+  const monitorFile = path.join(__dirname, '../renderer/network-monitor.html');
+  await monitorWindow.loadFile(monitorFile);
+  syncNetworkMonitorState();
+  return true;
+}
+
+function updateStatusBar(snapshot) {
+  if (isDevSandbox || !preferences.showInStatusBar) {
+    if (statusTray) {
+      try {
+        statusTray.destroy();
+      } catch (e) {}
+      statusTray = null;
+    }
+    return;
+  }
+
+  if (!statusTray) {
+    try {
+      const iconPath = path.join(__dirname, '../../build/icon.png');
+      let trayImg;
+      if (fs.existsSync(iconPath)) {
+        trayImg = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+      } else {
+        trayImg = nativeImage.createEmpty();
+      }
+      statusTray = new Tray(trayImg);
+      statusTray.setToolTip('Torrently — Live Network Speed');
+      statusTray.on('click', () => {
+        openNetworkMonitorWindow();
+      });
+    } catch (e) {
+      console.warn('[Status Tray] Failed to create tray:', e.message);
+      return;
+    }
+  }
+
+  const snap = snapshot || (networkMonitor ? networkMonitor.getSnapshot() : null);
+  if (!snap || !snap.current) return;
+
+  const downText = NetworkMonitor.formatBytes(snap.current.down);
+  const upText = NetworkMonitor.formatBytes(snap.current.up);
+  const downBits = NetworkMonitor.formatBits(snap.current.down);
+  const upBits = NetworkMonitor.formatBits(snap.current.up);
+
+  // Set menu bar title on macOS
+  if (process.platform === 'darwin' && typeof statusTray.setTitle === 'function') {
+    statusTray.setTitle(` ↓ ${downText}  ↑ ${upText}`);
+  }
+
+  // Update context menu
+  const contextMenu = Menu.buildFromTemplate([
+    { label: 'Torrently — Live Network Speed', enabled: false },
+    { type: 'separator' },
+    { label: `↓ Download: ${downText} (${downBits})`, enabled: false },
+    { label: `↑ Upload: ${upText} (${upBits})`, enabled: false },
+    { type: 'separator' },
+    {
+      label: 'Open Speed Graph & History...',
+      click: () => openNetworkMonitorWindow()
+    },
+    {
+      label: 'Open Torrently',
+      click: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          mainWindow.show();
+          mainWindow.focus();
+        } else {
+          createWindow();
+        }
+      }
+    },
+    { type: 'separator' },
+    {
+      label: 'Show in MacBook Status Bar',
+      type: 'checkbox',
+      checked: Boolean(preferences.showInStatusBar),
+      click: async (menuItem) => {
+        preferences.showInStatusBar = menuItem.checked;
+        updateStatusBar();
+        sendToRenderer('preferences-updated', preferences);
+      }
+    },
+    {
+      label: 'Quit Torrently',
+      click: () => app.quit()
+    }
+  ]);
+  statusTray.setContextMenu(contextMenu);
 }
 
 async function createWindow() {
@@ -103,6 +415,7 @@ async function createWindow() {
     height: 820,
     minWidth: 900,
     minHeight: 600,
+    title: isDevSandbox ? 'Torrently (Testing Sandbox)' : 'Torrently',
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#FAFAFA',
     webPreferences: {
@@ -115,21 +428,12 @@ async function createWindow() {
     mainWindow = null;
   });
 
+  mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+    console.log(`[Renderer Console L${line}]:`, message);
+  });
+
   if (!engine) {
-    const userDataDir = app.getPath('userData');
-    const userStatePath = path.join(userDataDir, 'torrently-state.json');
-    const localStatePath = path.join(__dirname, '../../torrently-state.json');
-
-    // Migrate existing state from local directory to userData if needed
-    if (!fs.existsSync(userStatePath) && fs.existsSync(localStatePath)) {
-      try {
-        fs.copyFileSync(localStatePath, userStatePath);
-      } catch (e) {}
-    }
-
-    const effectiveStatePath = fs.existsSync(userStatePath)
-      ? userStatePath
-      : (fs.existsSync(localStatePath) ? localStatePath : userStatePath);
+    const effectiveStatePath = migrateAndMergeTorrentState();
 
     engine = new TorrentEngine({
       stateFilePath: effectiveStatePath,
@@ -137,34 +441,99 @@ async function createWindow() {
     });
     await engine.init();
 
-    streamServer = new StreamServer(engine);
+    streamServer = new StreamServer(engine, {
+      getNetworkMonitor: () => networkMonitor,
+      getPreferences: () => preferences,
+      updatePreferences: (newPrefs) => {
+        preferences = { ...preferences, ...newPrefs };
+        if (preferences.savePath) {
+          preferences.savePath = expandPath(preferences.savePath);
+        }
+        savePreferencesToFile();
+        sendToRenderer('preferences-updated', preferences);
+        return preferences;
+      },
+      toggleStatusBar: (enable) => {
+        preferences.showInStatusBar = Boolean(enable);
+        savePreferencesToFile();
+        if (!preferences.showInStatusBar) {
+          destroyStatusBar();
+        } else {
+          createStatusBar();
+          if (networkMonitor && engine) {
+            updateStatusBar({
+              downloadSpeed: engine.client ? engine.client.downloadSpeed : 0,
+              uploadSpeed: engine.client ? engine.client.uploadSpeed : 0
+            });
+          }
+        }
+        sendToRenderer('preferences-updated', preferences);
+        return { showInStatusBar: preferences.showInStatusBar };
+      }
+    });
     await streamServer.start();
 
     engine.on('torrent-added', (torrent) => {
-      sendToRenderer('torrent-added', torrent);
+      try {
+        sendToRenderer('torrent-added', torrent);
+      } catch (e) {}
     });
 
     engine.on('torrent-progress', (progress) => {
-      sendToRenderer('torrent-progress', progress);
+      try {
+        sendToRenderer('torrent-progress', progress);
+      } catch (e) {}
     });
 
     engine.on('torrent-done', (torrent) => {
-      sendToRenderer('torrent-done', torrent);
-      if (preferences.showCompletionNotification && Notification.isSupported()) {
-        new Notification({
-          title: 'Download Complete',
-          body: `${torrent.name || 'Torrent'} has finished downloading.`
-        }).show();
-      }
+      try {
+        sendToRenderer('torrent-done', torrent);
+        if (preferences.showCompletionNotification && Notification.isSupported()) {
+          new Notification({
+            title: 'Download Complete',
+            body: `${torrent.name || 'Torrent'} has finished downloading.`
+          }).show();
+        }
+      } catch (e) {}
     });
 
     engine.on('torrent-removed', (data) => {
-      sendToRenderer('torrent-removed', data);
+      try {
+        sendToRenderer('torrent-removed', data);
+      } catch (e) {}
     });
 
     engine.on('torrent-action-status', (data) => {
-      sendToRenderer('torrent-action-status', data);
+      try {
+        sendToRenderer('torrent-action-status', data);
+      } catch (e) {}
     });
+
+    engine.on('loading-state', (data) => {
+      try {
+        sendToRenderer('engine-loading-state', data);
+      } catch (e) {}
+    });
+  }
+
+  if (!networkMonitor) {
+    const userDataDir = app.getPath('userData');
+    const historyPath = path.join(userDataDir, 'network-speed-history.json');
+    networkMonitor = new NetworkMonitor({
+      storagePath: historyPath,
+      engine: engine
+    });
+
+    networkMonitor.on('speed', (snapshot) => {
+      try {
+        broadcastNetworkSpeed(snapshot);
+        if (preferences.showInStatusBar) {
+          updateStatusBar(snapshot);
+        }
+      } catch (e) {}
+    });
+
+    syncNetworkMonitorState();
   }
 
   mainWindow.webContents.on('did-finish-load', () => {
@@ -213,13 +582,15 @@ ipcMain.handle('add-torrent', async (event, payload) => {
   return await engine.addTorrent(torrentId, options);
 });
 
-ipcMain.handle('pause-torrent', async (event, infoHash) => {
+ipcMain.handle('pause-torrent', async (event, payload) => {
   if (!engine) return false;
-  return engine.pauseTorrent(infoHash);
+  const infoHash = (typeof payload === 'object' && payload && payload.infoHash) ? payload.infoHash : payload;
+  return engine.pauseTorrent(infoHash, true);
 });
 
-ipcMain.handle('resume-torrent', async (event, infoHash) => {
+ipcMain.handle('resume-torrent', async (event, payload) => {
   if (!engine) return false;
+  const infoHash = (typeof payload === 'object' && payload && payload.infoHash) ? payload.infoHash : payload;
   return engine.resumeTorrent(infoHash);
 });
 
@@ -264,23 +635,27 @@ ipcMain.handle('create-torrent', async (event, payload) => {
 });
 
 ipcMain.handle('select-create-source', async (event, type = 'any') => {
-  if (!mainWindow || mainWindow.isDestroyed()) return null;
-  const properties = type === 'folder'
-    ? ['openDirectory']
-    : (type === 'file' ? ['openFile'] : ['openFile', 'openDirectory']);
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'Select File or Folder to Create Torrent',
-    properties: properties
-  });
-  if (!result.canceled && result.filePaths.length > 0) {
-    const chosen = result.filePaths[0];
-    const stat = fs.statSync(chosen);
-    return {
-      path: chosen,
-      name: path.basename(chosen),
-      isDirectory: stat.isDirectory(),
-      size: stat.isDirectory() ? 0 : stat.size
+  try {
+    const properties = type === 'folder'
+      ? ['openDirectory']
+      : (type === 'file' ? ['openFile'] : ['openFile', 'openDirectory']);
+    const dialogOpts = {
+      title: type === 'folder' ? 'Select Folder to Share / Create Torrent' : 'Select File to Share / Create Torrent',
+      properties: properties
     };
+    const result = await dialog.showOpenDialog(dialogOpts);
+    if (!result.canceled && result.filePaths && result.filePaths.length > 0) {
+      const chosen = result.filePaths[0];
+      const stat = fs.statSync(chosen);
+      return {
+        path: chosen,
+        name: path.basename(chosen),
+        isDirectory: stat.isDirectory(),
+        size: stat.isDirectory() ? 0 : stat.size
+      };
+    }
+  } catch (err) {
+    console.error('Error in select-create-source dialog:', err);
   }
   return null;
 });
@@ -420,14 +795,15 @@ ipcMain.handle('run-network-speed-test', async () => {
   }
 });
 
-
-let playerWindow = null;
-
 ipcMain.handle('open-player-window', async (event, { streamUrl, title }) => {
   if (playerWindow && !playerWindow.isDestroyed()) {
-    playerWindow.focus();
-    playerWindow.webContents.send('load-stream', { streamUrl, title });
-    return true;
+    try {
+      if (playerWindow.isMinimized()) playerWindow.restore();
+      playerWindow.show();
+      playerWindow.focus();
+      safeSend(playerWindow, 'load-stream', { streamUrl, title });
+      return true;
+    } catch (e) {}
   }
 
   playerWindow = new BrowserWindow({
@@ -465,8 +841,19 @@ ipcMain.handle('get-stream-url', async (event, { infoHash, fileIndex }) => {
 });
 
 ipcMain.handle('open-external-player', async (event, streamUrl) => {
-
   try {
+    if (process.platform === 'darwin') {
+      const { execFile } = require('child_process');
+      const vlcPath = '/Applications/VLC.app';
+      const iinaPath = '/Applications/IINA.app';
+      if (fs.existsSync(vlcPath)) {
+        execFile('open', ['-a', 'VLC', streamUrl]);
+        return true;
+      } else if (fs.existsSync(iinaPath)) {
+        execFile('open', ['-a', 'IINA', streamUrl]);
+        return true;
+      }
+    }
     await shell.openExternal(streamUrl);
     return true;
   } catch (e) {
@@ -485,24 +872,30 @@ ipcMain.handle('show-in-folder', async (event, filePath) => {
 });
 
 ipcMain.handle('select-folder', async () => {
-  if (!mainWindow || mainWindow.isDestroyed()) return preferences.savePath;
-  const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openDirectory']
-  });
-  if (!result.canceled && result.filePaths.length > 0) {
-    return result.filePaths[0];
+  try {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory']
+    });
+    if (!result.canceled && result.filePaths && result.filePaths.length > 0) {
+      return result.filePaths[0];
+    }
+  } catch (err) {
+    console.error('Error in select-folder dialog:', err);
   }
   return preferences.savePath;
 });
 
 ipcMain.handle('select-torrent-file', async () => {
-  if (!mainWindow || mainWindow.isDestroyed()) return null;
-  const result = await dialog.showOpenDialog(mainWindow, {
-    filters: [{ name: 'Torrent Files', extensions: ['torrent'] }],
-    properties: ['openFile']
-  });
-  if (!result.canceled && result.filePaths.length > 0) {
-    return result.filePaths[0];
+  try {
+    const result = await dialog.showOpenDialog({
+      filters: [{ name: 'Torrent Files', extensions: ['torrent'] }],
+      properties: ['openFile']
+    });
+    if (!result.canceled && result.filePaths && result.filePaths.length > 0) {
+      return result.filePaths[0];
+    }
+  } catch (err) {
+    console.error('Error in select-torrent-file dialog:', err);
   }
   return null;
 });
@@ -512,11 +905,73 @@ ipcMain.handle('get-preferences', async () => {
 });
 
 ipcMain.handle('save-preferences', async (event, newPrefs) => {
+  if (newPrefs && newPrefs.menuVisibility) {
+    newPrefs.menuVisibility.preferences = true;
+    newPrefs.menuVisibility = {
+      ...preferences.menuVisibility,
+      ...newPrefs.menuVisibility,
+      preferences: true
+    };
+  }
+  if (newPrefs && newPrefs.enableCli !== undefined) {
+    try {
+      if (newPrefs.enableCli) {
+        cliInstaller.install();
+      } else {
+        cliInstaller.uninstall();
+      }
+    } catch (e) {
+      console.warn('[Torrently] CLI install toggle error:', e.message);
+    }
+  }
   preferences = { ...preferences, ...newPrefs };
   if (preferences.savePath) {
     preferences.savePath = expandPath(preferences.savePath);
   }
+  savePreferencesToFile();
+  updateStatusBar();
+  syncNetworkMonitorState();
   return preferences;
+});
+
+ipcMain.handle('get-pending-open-files', async () => {
+  const files = [...pendingFilesToOpen];
+  pendingFilesToOpen.length = 0;
+  return files;
+});
+
+// Live Network Monitor IPC Handlers
+ipcMain.handle('get-live-network-speed', async () => {
+  return networkMonitor ? networkMonitor.getSnapshot() : null;
+});
+
+ipcMain.handle('get-network-speed-history', async (event, options) => {
+  return networkMonitor ? networkMonitor.getHistory(options) : [];
+});
+
+ipcMain.handle('open-network-monitor-window', async () => {
+  return openNetworkMonitorWindow();
+});
+
+ipcMain.handle('clear-network-speed-history', async () => {
+  if (networkMonitor) {
+    networkMonitor.clearHistory();
+    safeSend(mainWindow, 'network-speed-history-cleared');
+    safeSend(monitorWindow, 'network-speed-history-cleared');
+    return true;
+  }
+  return false;
+});
+
+ipcMain.handle('export-network-speed-history', async (event, format = 'json') => {
+  return networkMonitor ? networkMonitor.exportHistory(format) : '';
+});
+
+ipcMain.handle('toggle-status-bar-speed', async (event, enable) => {
+  preferences.showInStatusBar = Boolean(enable);
+  updateStatusBar();
+  sendToRenderer('preferences-updated', preferences);
+  return { showInStatusBar: preferences.showInStatusBar };
 });
 
 ipcMain.handle('get-player-audio-settings', async () => {
@@ -539,7 +994,34 @@ ipcMain.handle('save-player-audio-settings', async (event, payload) => {
   };
 });
 
-app.whenReady().then(createWindow);
+ipcMain.handle('get-cli-status', async () => {
+  return cliInstaller.getStatus();
+});
+
+ipcMain.handle('install-cli', async () => {
+  const result = cliInstaller.install();
+  preferences.enableCli = true;
+  sendToRenderer('preferences-updated', preferences);
+  return result;
+});
+
+ipcMain.handle('uninstall-cli', async () => {
+  const result = cliInstaller.uninstall();
+  preferences.enableCli = false;
+  sendToRenderer('preferences-updated', preferences);
+  return result;
+});
+
+app.whenReady().then(async () => {
+  if (preferences.enableCli !== false) {
+    try {
+      cliInstaller.autoInstallIfEnabled();
+    } catch (e) {
+      console.warn('[Torrently] Could not auto-enable CLI:', e.message);
+    }
+  }
+  await createWindow();
+});
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
@@ -548,6 +1030,17 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
+  if (networkMonitor) {
+    try {
+      networkMonitor.destroy();
+    } catch (e) {}
+  }
+  if (statusTray) {
+    try {
+      statusTray.destroy();
+    } catch (e) {}
+    statusTray = null;
+  }
   if (engine) {
     try {
       engine.destroy();

@@ -150,16 +150,79 @@ test('TorrentEngine pause and resume state controls', async () => {
 
   assert.strictEqual(torrent.paused, false);
 
-  const pauseRes = engine.pauseTorrent(torrent.infoHash);
-  assert.strictEqual(pauseRes, true);
-  const pausedMeta = engine.torrents.get(torrent.infoHash);
-  assert.strictEqual(pausedMeta.paused, true);
-  assert.strictEqual(pausedMeta.downloadSpeed, 0);
+  // Mock WebTorrent client instance with active wire and in-flight piece requests
+  let wireCanceled = false;
+  let wireUninterested = false;
+  let wireChoked = false;
+  let wireUnchoked = false;
+  let wtDeselected = false;
+  let wtResumed = false;
 
-  const resumeRes = engine.resumeTorrent(torrent.infoHash);
-  assert.strictEqual(resumeRes, true);
-  const resumedMeta = engine.torrents.get(torrent.infoHash);
-  assert.strictEqual(resumedMeta.paused, false);
+  const mockWire = {
+    requests: [{ piece: 5, offset: 0, length: 16384 }],
+    cancel: (piece, offset, length) => { wireCanceled = true; },
+    uninterested: () => { wireUninterested = true; },
+    choke: () => { wireChoked = true; },
+    unchoke: () => { wireUnchoked = true; }
+  };
+
+  const mockFile = {
+    index: 0,
+    name: 'test.mp4',
+    length: 500000,
+    downloadSpeed: 50000,
+    _smoothSpeed: 50000,
+    deselect: () => {},
+    select: () => {}
+  };
+
+  const mockWt = {
+    infoHash: torrent.infoHash,
+    paused: false,
+    pieces: [true, true, true],
+    files: [mockFile],
+    wires: [mockWire],
+    downloadSpeed: 100000,
+    pause: () => { mockWt.paused = true; },
+    resume: () => { mockWt.paused = false; wtResumed = true; },
+    deselect: (from, to, isStream) => { wtDeselected = true; }
+  };
+
+  engine.client = {
+    torrents: [mockWt],
+    get: async () => mockWt // Note: client.get returns a Promise in WebTorrent v3!
+  };
+
+  // Test 1: Pause with uppercase infoHash (case-insensitive test) and userAction
+  const upperHash = torrent.infoHash.toUpperCase();
+  const pauseRes = engine.pauseTorrent(upperHash, true);
+  assert.strictEqual(pauseRes, true, 'pauseTorrent should return true even with uppercase infoHash');
+
+  const pausedMeta = engine.getTorrent(torrent.infoHash);
+  assert.strictEqual(pausedMeta.paused, true, 'Torrent must be marked paused');
+  assert.strictEqual(pausedMeta.userPaused, true, 'Torrent must record userPaused flag');
+  assert.strictEqual(pausedMeta.downloadSpeed, 0, 'downloadSpeed must be zero when paused');
+  assert.strictEqual(mockWt.paused, true, 'WebTorrent instance must be marked paused');
+  assert.strictEqual(mockWt.downloadSpeed, 0, 'WebTorrent downloadSpeed must be zeroed');
+  assert.strictEqual(wtDeselected, true, 'WebTorrent pieces must be deselected to stop download requests');
+  assert.strictEqual(wireCanceled, true, 'In-flight wire block requests must be canceled');
+  assert.strictEqual(wireUninterested, true, 'Wire uninterested must be called');
+  assert.strictEqual(wireChoked, true, 'Wire choke must be called');
+
+  // Verify selecting a file while user-paused DOES NOT auto-resume the torrent
+  engine.setFileWanted(torrent.infoHash, 0, true);
+  assert.strictEqual(pausedMeta.paused, true, 'Selecting file while user-paused must keep torrent paused');
+
+  // Test 2: Resume with lowercase infoHash
+  const resumeRes = engine.resumeTorrent(torrent.infoHash.toLowerCase());
+  assert.strictEqual(resumeRes, true, 'resumeTorrent should return true');
+
+  const resumedMeta = engine.getTorrent(torrent.infoHash);
+  assert.strictEqual(resumedMeta.paused, false, 'Torrent must be marked unpaused');
+  assert.strictEqual(resumedMeta.userPaused, false, 'Torrent must clear userPaused flag');
+  assert.strictEqual(mockWt.paused, false, 'WebTorrent instance must be resumed');
+  assert.strictEqual(wtResumed, true, 'WebTorrent resume method must be called');
+  assert.strictEqual(wireUnchoked, true, 'Wire unchoke must be called on resume');
 
   engine.client = client;
   engine.destroy();
@@ -1218,3 +1281,101 @@ test('Binary .torrent export: converts Uint8Array buffers cleanly and produces p
 
   engine.destroy();
 });
+
+test('TorrentEngine emit suppression: listener errors (e.g. Object has been destroyed) do not crash engine or stream', async () => {
+  const engine = new TorrentEngine({ disableState: true, disableClient: true });
+  await engine.init();
+
+  // Attach a listener that simulates Electron webContents destroyed exception
+  let listenerRan = false;
+  engine.on('torrent-progress', () => {
+    listenerRan = true;
+    throw new TypeError('Object has been destroyed');
+  });
+
+  // Emitting must not throw or bubble up
+  assert.doesNotThrow(() => {
+    engine.emit('torrent-progress', { infoHash: 'test', progress: 0.5 });
+  });
+
+  assert.strictEqual(listenerRan, true);
+  engine.destroy();
+});
+
+test('TorrentEngine: accurate seeders and leechers calculation from wires and tracker announces', async () => {
+  const engine = new TorrentEngine({ disableState: true, disableClient: true });
+  await engine.init();
+
+  const torrent = await engine.addTorrent('magnet:?xt=urn:btih:4444444444444444444444444444444444444444&dn=TestSwarm', {
+    name: 'TestSwarm',
+    paused: false
+  });
+
+  const t = engine.torrents.get(torrent.infoHash);
+  // Simulate 3 wires: 2 seeders, 1 leecher
+  t.wires = [
+    { isSeeder: true, remoteAddress: '1.1.1.1' },
+    { isSeeder: true, remoteAddress: '2.2.2.2' },
+    { isSeeder: false, remoteAddress: '3.3.3.3' }
+  ];
+  t.numPeers = 3;
+
+  const meta = engine.formatTorrentMeta(t);
+  assert.strictEqual(meta.seeders, 2);
+  assert.strictEqual(meta.leechers, 1);
+
+  const prog = engine.formatTorrentProgress(t);
+  assert.strictEqual(prog.seeders, 2);
+  assert.strictEqual(prog.leechers, 1);
+
+  // Simulate tracker announce with larger swarm info
+  t._trackerSeeders = 15;
+  t._trackerLeechers = 8;
+  const updatedMeta = engine.formatTorrentMeta(t);
+  assert.strictEqual(updatedMeta.seeders, 15);
+  assert.strictEqual(updatedMeta.leechers, 8);
+
+  engine.destroy();
+});
+
+test('TorrentEngine: single file completion does not falsely mark unfinished files as completed', async () => {
+  const engine = new TorrentEngine({ disableState: true, disableClient: true });
+  await engine.init();
+
+  const torrent = await engine.addTorrent('magnet:?xt=urn:btih:5555555555555555555555555555555555555555&dn=MultiFile', {
+    name: 'MultiFile',
+    paused: false,
+    files: [
+      { index: 0, name: 'file1.txt', path: 'file1.txt', length: 1000, downloaded: 1000, progress: 1.0, done: true, wanted: true },
+      { index: 1, name: 'file2.bin', path: 'file2.bin', length: 50000, downloaded: 5000, progress: 0.1, done: false, wanted: true }
+    ]
+  });
+
+  const t = engine.torrents.get(torrent.infoHash);
+  const formatted = engine.formatTorrentProgress(t);
+
+  assert.strictEqual(formatted.files[0].isDone, true);
+  assert.strictEqual(formatted.files[0].completed, true);
+  assert.strictEqual(formatted.files[0].progress, 1.0);
+
+  // File 2 MUST NOT be done
+  assert.strictEqual(formatted.files[1].isDone, false);
+  assert.strictEqual(formatted.files[1].completed, false);
+  assert.strictEqual(formatted.files[1].progress, 0.1);
+
+  engine.destroy();
+});
+
+test('UI Style: Torrent compact progress bar is rectangular and 35% width', () => {
+  const cssPath = path.resolve(__dirname, '../src/renderer/style.css');
+  const css = fs.readFileSync(cssPath, 'utf8');
+
+  // Verify 35% width
+  assert.ok(css.includes('flex: 0 0 35%;'), 'compact progress container must be 35% width');
+  assert.ok(css.includes('max-width: 35%;'), 'compact progress container max-width must be 35%');
+
+  // Verify rectangular border-radius
+  assert.ok(css.includes('border-radius: 2px;'), 'compact bar background must have crisp 2px rectangular border-radius');
+  assert.ok(css.includes('border-radius: 0;'), 'compact bar fill must have rectangular 0 border-radius');
+});
+

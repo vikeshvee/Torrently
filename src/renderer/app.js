@@ -38,6 +38,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   let completionSoundEnabled = true;
   let completionNotifyEnabled = true;
 
+  if (typeof process !== 'undefined' && process.env && process.env.TORRENTLY_DEV_SANDBOX === '1') {
+    const brandText = document.querySelector('.brand-text');
+    if (brandText) {
+      brandText.innerHTML = `
+        <span class="brand-title">Torrently <span style="font-size: 10px; color: #0284C7; font-weight: 700; background: #E0F2FE; padding: 2px 6px; border-radius: 4px; vertical-align: middle;">SANDBOX</span></span>
+        <span class="brand-badge" style="background: #0F172A; color: #38BDF8;">TEST NAMESPACE</span>
+      `;
+    }
+  }
+
   // Sanitizes and trims pasted torrent links, stripping surrounding brackets, quotes, and trailing sentence punctuation
   function sanitizeTorrentInput(input) {
     if (!input) return '';
@@ -46,14 +56,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     s = s.replace(/^[<"'\s`]+|[>"'\s`]+$/g, '').trim();
 
     // If string contains a magnet URI anywhere, extract the full magnet URI
-    const magnetMatch = s.match(/(magnet:\?xt=urn:btih:[a-zA-Z0-9]+[^\s<>"`]*)/i);
+    const magnetMatch = s.match(/(magnet:\?[^\s<>"`]+)/i);
     if (magnetMatch) {
       let uri = magnetMatch[1];
       // Strip trailing punctuation like .,;: attached to sentence ends
       uri = uri.replace(/[.,;:]+$/, '');
       return uri;
     }
-
 
     // Strip trailing punctuation from hash or URL
     s = s.replace(/[.,;:]+$/, '').trim();
@@ -115,26 +124,148 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // Navigation Tab View Switching
+  let currentActiveTab = 'downloads';
   const navItems = document.querySelectorAll('.nav-item');
   const viewSections = document.querySelectorAll('.view-section');
+
+  function syncTorrentsToActiveView(tab = currentActiveTab) {
+    const activeList = document.getElementById('torrent-list');
+    const completedList = document.getElementById('completed-list');
+    const myTorrentsList = document.getElementById('my-torrents-list');
+
+    torrentCardsMap.forEach((card, infoHash) => {
+      const t = torrentDataMap.get(infoHash) || {};
+      const pct = Math.min(100, Math.floor((t.progress || 0) * 100));
+      const isMyTorrent = Boolean(t.isMyTorrent || t.createdByUser);
+      const isCompleted = pct >= 100 && !t.verifying && !t.actionBusy;
+
+      let targetList = activeList;
+      if (tab === 'my-torrents') {
+        if (isMyTorrent && myTorrentsList) targetList = myTorrentsList;
+        else if (isCompleted && completedList) targetList = completedList;
+        else targetList = activeList;
+      } else if (tab === 'completed') {
+        if (isCompleted && completedList) targetList = completedList;
+        else if (isMyTorrent && myTorrentsList) targetList = myTorrentsList;
+        else targetList = activeList;
+      } else {
+        // 'downloads' tab or default: user-created torrents appear in activeList as active seeding torrents!
+        if (isCompleted && !isMyTorrent && completedList) {
+          targetList = completedList;
+        } else {
+          targetList = activeList;
+        }
+      }
+
+      if (targetList && card.parentNode !== targetList) {
+        targetList.prepend(card);
+      }
+    });
+  }
+
+  const STORAGE_KEY_MENU_VISIBILITY = 'torrently_menu_visibility';
+  const DEFAULT_MENU_VISIBILITY = {
+    downloads: true,
+    completed: true,
+    'my-torrents': false, // Default hidden per user request
+    preferences: true     // Settings cannot be hidden
+  };
+
+  function getStoredMenuVisibility() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_MENU_VISIBILITY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return {
+          downloads: parsed.downloads !== undefined ? Boolean(parsed.downloads) : true,
+          completed: parsed.completed !== undefined ? Boolean(parsed.completed) : true,
+          'my-torrents': parsed['my-torrents'] !== undefined ? Boolean(parsed['my-torrents']) : false,
+          preferences: true // Settings cannot be hidden
+        };
+      }
+    } catch (e) {}
+    return { ...DEFAULT_MENU_VISIBILITY };
+  }
+
+  let currentMenuVisibility = getStoredMenuVisibility();
+
+  function applyMenuVisibility(visibility) {
+    currentMenuVisibility = {
+      downloads: visibility && visibility.downloads !== undefined ? Boolean(visibility.downloads) : true,
+      completed: visibility && visibility.completed !== undefined ? Boolean(visibility.completed) : true,
+      'my-torrents': visibility && visibility['my-torrents'] !== undefined ? Boolean(visibility['my-torrents']) : false,
+      preferences: true // Settings can never be hidden
+    };
+
+    const tabs = ['downloads', 'completed', 'my-torrents', 'preferences'];
+    tabs.forEach(tab => {
+      const isVisible = currentMenuVisibility[tab] !== false;
+      const navItem = document.querySelector(`.nav-item[data-tab="${tab}"]`);
+      if (navItem) {
+        if (isVisible) {
+          navItem.style.display = 'flex';
+          navItem.classList.remove('nav-item-hidden');
+        } else {
+          navItem.style.display = 'none';
+          navItem.classList.add('nav-item-hidden');
+        }
+      }
+    });
+
+    // If currently active tab is hidden, navigate to first visible tab
+    if (currentMenuVisibility[currentActiveTab] === false) {
+      const fallbackTab = currentMenuVisibility.downloads 
+        ? 'downloads' 
+        : (currentMenuVisibility.completed ? 'completed' : 'preferences');
+      switchNavTab(fallbackTab);
+    }
+
+    if (typeof syncMenuVisibilityCheckboxes === 'function') {
+      syncMenuVisibilityCheckboxes();
+    }
+  }
+  window.applyMenuVisibility = applyMenuVisibility;
+  window.getMenuVisibility = () => ({ ...currentMenuVisibility });
+
+  function switchNavTab(targetTab) {
+    if (!targetTab) return;
+    // If target tab is hidden, fallback to first visible tab
+    if (currentMenuVisibility && currentMenuVisibility[targetTab] === false) {
+      targetTab = currentMenuVisibility.downloads 
+        ? 'downloads' 
+        : (currentMenuVisibility.completed ? 'completed' : 'preferences');
+    }
+    currentActiveTab = targetTab;
+
+    navItems.forEach(n => {
+      if (n.getAttribute('data-tab') === targetTab) {
+        n.classList.add('active');
+      } else {
+        n.classList.remove('active');
+      }
+    });
+
+    viewSections.forEach(sec => {
+      sec.classList.remove('active');
+      if (sec.id === `${targetTab}-view`) {
+        sec.classList.add('active');
+      }
+    });
+    syncTorrentsToActiveView(currentActiveTab);
+    checkEmptyState();
+  }
+  window.switchNavTab = switchNavTab;
 
   navItems.forEach(item => {
     item.addEventListener('click', (e) => {
       e.preventDefault();
       const targetTab = item.getAttribute('data-tab');
-
-      navItems.forEach(n => n.classList.remove('active'));
-      item.classList.add('active');
-
-      viewSections.forEach(sec => {
-        sec.classList.remove('active');
-        if (sec.id === `${targetTab}-view`) {
-          sec.classList.add('active');
-        }
-      });
-      checkEmptyState();
+      switchNavTab(targetTab);
     });
   });
+
+  // Apply saved/default menu visibility immediately on load
+  applyMenuVisibility(currentMenuVisibility);
 
   function checkEmptyState() {
     const activeList = document.getElementById('torrent-list');
@@ -146,7 +277,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           const emptyDiv = document.createElement('div');
           emptyDiv.className = 'empty-state';
           emptyDiv.id = 'empty-state';
-          emptyDiv.innerHTML = `<p style="text-align: center; color: var(--text-muted); padding: 40px; font-size: 13px;">No active downloads. Click <b>Add Magnet Link</b> or <b>Open .torrent</b> to begin.</p>`;
+          emptyDiv.innerHTML = `<p style="text-align: center; color: var(--text-muted); padding: 40px; font-size: 13px;">No active downloads. Click <b>Add Magnet Link</b>, <b>Open .torrent</b>, or <b>Share Files</b> to begin.</p>`;
           activeList.appendChild(emptyDiv);
         }
       } else if (emptyState) {
@@ -174,8 +305,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const myList = document.getElementById('my-torrents-list');
     const myEmpty = document.getElementById('my-torrents-empty');
     if (myList && myEmpty) {
-      const myCards = myList.querySelectorAll('.torrent-card-compact');
-      if (myCards.length === 0) {
+      let myTotal = 0;
+      torrentDataMap.forEach(t => {
+        if (t.isMyTorrent || t.createdByUser) myTotal++;
+      });
+      if (myTotal === 0) {
         myEmpty.style.display = 'flex';
       } else {
         myEmpty.style.display = 'none';
@@ -183,10 +317,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  // Screen Loading Indicator Handlers
+  const screenLoadingIndicator = document.getElementById('screen-loading-indicator');
+  const screenLoadingText = document.getElementById('screen-loading-text');
+
+  function showScreenLoading(text = 'Refreshing torrents...') {
+    if (screenLoadingIndicator) {
+      if (screenLoadingText) screenLoadingText.textContent = text;
+      screenLoadingIndicator.style.display = 'inline-flex';
+    }
+  }
+
+  function hideScreenLoading() {
+    if (screenLoadingIndicator) {
+      screenLoadingIndicator.style.display = 'none';
+    }
+  }
+
   // Refresh Action Button Handler
   const btnRefreshList = document.getElementById('btn-refresh-list');
   if (btnRefreshList) {
     btnRefreshList.addEventListener('click', async () => {
+      showScreenLoading('Refreshing torrent list...');
       if (ipcRenderer) {
         try {
           const torrents = await ipcRenderer.invoke('get-torrents');
@@ -204,7 +356,11 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
         } catch (e) {
           console.warn('Error refreshing torrent list:', e);
+        } finally {
+          setTimeout(hideScreenLoading, 300);
         }
+      } else {
+        setTimeout(hideScreenLoading, 300);
       }
     });
   }
@@ -286,7 +442,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let selectedCreateSource = null;
 
   const DEFAULT_SWARM_TRACKERS = [
-    'udp://tracker.opentrackers.org:1337/announce',
+    'udp://tracker.opentrackr.org:1337/announce',
     'udp://open.stealth.si:80/announce',
     'udp://tracker.torrent.eu.org:451/announce',
     'udp://tracker.bittor.pw:1337/announce',
@@ -294,7 +450,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     'udp://tracker.dler.org:6969/announce',
     'udp://exodus.desync.com:6969/announce',
     'udp://open.demonii.com:1337/announce',
-    'http://tracker.openbittorrent.com:80/announce'
+    'udp://tracker.openbittorrent.com:6969/announce',
+    'http://tracker.openbittorrent.com:80/announce',
+    'wss://tracker.openwebtorrent.com',
+    'wss://tracker.btorrent.xyz',
+    'wss://tracker.files.fm:7073/announce',
+    'wss://tracker.fastcast.nz'
   ].join('\n');
 
   window.openShareModal = async function(infoHash) {
@@ -326,6 +487,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       shareSourceBadge.style.background = isMy ? '#D1FAE5' : '#E0F2FE';
       shareSourceBadge.style.color = isMy ? '#047857' : '#0369A1';
       shareSourceBadge.style.borderColor = isMy ? '#A7F3D0' : '#BAE6FD';
+    }
+
+    const trackerCountEl = document.getElementById('share-trackers-count');
+    if (trackerCountEl) {
+      const announceCount = (shareInfo && Array.isArray(shareInfo.announce)) ? shareInfo.announce.length : 14;
+      trackerCountEl.textContent = `${announceCount} Trackers Injected`;
     }
 
     if (shareMagnetInput) shareMagnetInput.value = magnet;
@@ -361,48 +528,116 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     selectedCreateSource = null;
     if (createSourcePreview) {
-      createSourcePreview.innerHTML = '<span class="preview-placeholder">No source selected yet. Pick a single file or a directory containing all files and folders.</span>';
+      createSourcePreview.innerHTML = '<span class="preview-placeholder">No source selected yet. Pick a single file, directory, or drag & drop here.</span>';
     }
+    const pathInput = document.getElementById('create-source-path-input');
+    if (pathInput) pathInput.value = '';
     if (createTorrentNameInput) createTorrentNameInput.value = '';
     if (btnSubmitCreate) btnSubmitCreate.disabled = true;
   }
 
-  async function chooseCreateSource(type) {
-    if (!ipcRenderer) return;
+  function setChosenCreateSource(targetPath, explicitIsDir = null) {
+    if (!targetPath || typeof targetPath !== 'string') return;
+    const cleanPath = targetPath.trim();
+    if (!cleanPath) return;
+
+    let isDir = false;
+    let fileSize = 0;
+    let fileName = '';
+
     try {
-      const source = await ipcRenderer.invoke('select-create-source', type);
-      if (source && source.path) {
-        selectedCreateSource = source;
-        const typeBadge = source.isDirectory ? '<span class="source-badge">DIRECTORY</span>' : '<span class="source-badge">FILE</span>';
-        const sizeInfo = source.isDirectory ? 'All sub-files & folders auto-included' : formatBytes(source.size);
-        createSourcePreview.innerHTML = `
-          <div class="source-selected-info">
-            <div>
-              ${typeBadge}
-              <strong style="margin-left: 6px; color: #0F172A;">${source.name}</strong>
-              <div style="font-size: 11px; color: #64748B; margin-top: 2px;">📁 ${source.path} (${sizeInfo})</div>
-            </div>
-          </div>
-        `;
-        if (createTorrentNameInput && !createTorrentNameInput.value.trim()) {
-          createTorrentNameInput.value = source.name;
+      if (typeof require !== 'undefined') {
+        const fs = require('fs');
+        const path = require('path');
+        if (fs.existsSync(cleanPath)) {
+          const stat = fs.statSync(cleanPath);
+          isDir = stat.isDirectory();
+          fileSize = isDir ? 0 : stat.size;
+          fileName = path.basename(cleanPath);
+        } else {
+          isDir = Boolean(explicitIsDir);
+          fileName = path.basename(cleanPath);
         }
-        if (btnSubmitCreate) btnSubmitCreate.disabled = false;
+      } else {
+        isDir = Boolean(explicitIsDir);
+        fileName = cleanPath.split(/[/\\]/).pop() || cleanPath;
       }
-    } catch (err) {
-      console.warn('Source selection note:', err);
+    } catch (e) {
+      isDir = Boolean(explicitIsDir);
+      fileName = cleanPath.split(/[/\\]/).pop() || cleanPath;
+    }
+
+    selectedCreateSource = {
+      path: cleanPath,
+      name: fileName,
+      isDirectory: isDir,
+      size: fileSize
+    };
+
+    const typeBadge = isDir ? '<span class="source-badge">DIRECTORY</span>' : '<span class="source-badge">FILE</span>';
+    const sizeInfo = isDir ? 'All sub-files & folders auto-included' : formatBytes(fileSize);
+
+    if (createSourcePreview) {
+      createSourcePreview.innerHTML = `
+        <div class="source-selected-info">
+          <div>
+            ${typeBadge}
+            <strong style="margin-left: 6px; color: var(--text-primary);">${fileName}</strong>
+            <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">📁 ${cleanPath} (${sizeInfo})</div>
+          </div>
+        </div>
+      `;
+    }
+
+    const pathInput = document.getElementById('create-source-path-input');
+    if (pathInput) pathInput.value = cleanPath;
+
+    if (createTorrentNameInput && !createTorrentNameInput.value.trim()) {
+      createTorrentNameInput.value = fileName;
+    }
+    if (btnSubmitCreate) btnSubmitCreate.disabled = false;
+  }
+
+  async function chooseCreateSource(type) {
+    let source = null;
+    if (ipcRenderer) {
+      try {
+        source = await ipcRenderer.invoke('select-create-source', type);
+      } catch (err) {
+        console.warn('IPC select-create-source note:', err);
+      }
+    }
+    if (source && source.path) {
+      setChosenCreateSource(source.path, source.isDirectory);
+      return;
+    }
+    // Direct DOM fallback if dialog was canceled or unavailable
+    const hiddenFile = document.getElementById('hidden-create-file');
+    const hiddenFolder = document.getElementById('hidden-create-folder');
+    if (type === 'folder' && hiddenFolder) {
+      hiddenFolder.click();
+    } else if (hiddenFile) {
+      hiddenFile.click();
     }
   }
 
-  async function openMagnetModal() {
+  async function openMagnetModal(presetUrl = '') {
     magnetModal.classList.add('active');
 
-    // Auto-detect and paste torrent/magnet link from clipboard
+    if (presetUrl) {
+      magnetInput.value = sanitizeTorrentInput(presetUrl);
+      magnetInput.select();
+      magnetInput.focus();
+      return;
+    }
+
+    // Always reset input first: if clipboard has valid torrent/magnet data populate it, else leave empty
+    magnetInput.value = '';
     let clipText = '';
     try {
       if (typeof require !== 'undefined') {
         const { clipboard } = require('electron');
-        clipText = clipboard.readText() || '';
+        clipText = (clipboard && clipboard.readText()) || '';
       } else if (navigator.clipboard && navigator.clipboard.readText) {
         clipText = (await navigator.clipboard.readText()) || '';
       }
@@ -411,7 +646,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (clipText) {
-      const sanitized = sanitizeTorrentInput(clipText);
+      const sanitized = sanitizeTorrentInput(clipText.trim());
       if (sanitized && (
         sanitized.startsWith('magnet:?') ||
         /^[0-9a-fA-F]{40}$/.test(sanitized) ||
@@ -544,7 +779,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       if (!peersTableBody) return;
       if (!Array.isArray(peers) || peers.length === 0) {
-        peersTableBody.innerHTML = `<div class="peers-empty">Searching for peers in swarm...</div>`;
+        const tData = torrentDataMap.get(activeInspectorHash);
+        const isMy = tData && (tData.isMyTorrent || tData.createdByUser);
+        if (isMy) {
+          peersTableBody.innerHTML = `
+            <div class="peers-empty" style="padding: 24px 16px; text-align: center; color: var(--text-muted); line-height: 1.6;">
+              <div style="font-size: 13px; font-weight: 600; color: var(--text-color); margin-bottom: 6px;">🟢 Seeding to Worldwide Swarm</div>
+              <div>Your files are actively announced to 14 global trackers and the DHT network.</div>
+              <div style="font-size: 11px; margin-top: 6px;">Waiting for downloading peers to connect. Anyone with your Magnet URI or .torrent file will appear here.</div>
+            </div>`;
+        } else {
+          peersTableBody.innerHTML = `<div class="peers-empty">Searching for peers in swarm...</div>`;
+        }
         return;
       }
 
@@ -648,6 +894,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  if (magnetInput) {
+    magnetInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (btnSubmitMagnetNext) btnSubmitMagnetNext.click();
+      } else if (e.key === 'Escape') {
+        closeMagnetModal();
+      }
+    });
+  }
+
   // Global clipboard paste support (Cmd+V / Ctrl+V anywhere on window)
   window.addEventListener('paste', async (e) => {
     if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
@@ -734,13 +991,51 @@ document.addEventListener('DOMContentLoaded', async () => {
       closePromptModal();
 
       if (ipcRenderer) {
-        await ipcRenderer.invoke('add-torrent', payload);
+        const added = await ipcRenderer.invoke('add-torrent', payload);
+        if (added && added.infoHash && !payload.paused) {
+          added.paused = false;
+          added._lastUserPauseToggle = 0;
+          const targetHash = added.infoHash.toLowerCase();
+          const existing = torrentDataMap.get(added.infoHash) || torrentDataMap.get(targetHash);
+          if (existing) {
+            existing.paused = false;
+            existing._lastUserPauseToggle = 0;
+          }
+        }
+        // Switch to Downloads tab automatically so user immediately sees the newly added torrent
+        if (typeof window.switchNavTab === 'function') {
+          window.switchNavTab('downloads');
+        }
         // Instant screen refresh for updated torrent list
         const torrents = await ipcRenderer.invoke('get-torrents');
         if (Array.isArray(torrents)) {
-          torrents.forEach(t => renderTorrentCard(t));
+          torrents.forEach(t => {
+            if (added && added.infoHash && t.infoHash && t.infoHash.toLowerCase() === added.infoHash.toLowerCase() && !payload.paused) {
+              t.paused = false;
+              t._lastUserPauseToggle = 0;
+            }
+            renderTorrentCard(t);
+          });
+        }
+        if (added && added.infoHash) {
+          const card = document.getElementById(`card-${added.infoHash}`);
+          if (card) {
+            card.classList.add('card-just-added');
+            setTimeout(() => card.classList.remove('card-just-added'), 3000);
+          }
         }
         checkEmptyState();
+      }
+    });
+  }
+
+  if (addPromptModal) {
+    addPromptModal.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target && e.target.tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        if (btnSubmitPrompt) btnSubmitPrompt.click();
+      } else if (e.key === 'Escape') {
+        closePromptModal();
       }
     });
   }
@@ -786,6 +1081,193 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnBrowseFolder = document.getElementById('btn-browse-folder');
   const btnSavePrefs = document.getElementById('btn-save-prefs');
 
+  function syncMenuVisibilityCheckboxes() {
+    const elDownloads = document.getElementById('pref-menu-downloads');
+    const elCompleted = document.getElementById('pref-menu-completed');
+    const elMyTorrents = document.getElementById('pref-menu-my-torrents');
+    const elPreferences = document.getElementById('pref-menu-preferences');
+    if (elDownloads) elDownloads.checked = currentMenuVisibility.downloads !== false;
+    if (elCompleted) elCompleted.checked = currentMenuVisibility.completed !== false;
+    if (elMyTorrents) elMyTorrents.checked = currentMenuVisibility['my-torrents'] === true;
+    if (elPreferences) {
+      elPreferences.checked = true;
+      elPreferences.disabled = true;
+    }
+  }
+  syncMenuVisibilityCheckboxes();
+
+  function onMenuVisibilityToggled() {
+    const elDownloads = document.getElementById('pref-menu-downloads');
+    const elCompleted = document.getElementById('pref-menu-completed');
+    const elMyTorrents = document.getElementById('pref-menu-my-torrents');
+    const updated = {
+      downloads: elDownloads ? elDownloads.checked : true,
+      completed: elCompleted ? elCompleted.checked : true,
+      'my-torrents': elMyTorrents ? elMyTorrents.checked : false,
+      preferences: true // Settings cannot be hidden
+    };
+    applyMenuVisibility(updated);
+    try {
+      localStorage.setItem(STORAGE_KEY_MENU_VISIBILITY, JSON.stringify(currentMenuVisibility));
+    } catch (e) {}
+    if (ipcRenderer) {
+      ipcRenderer.invoke('save-preferences', { menuVisibility: currentMenuVisibility }).catch(() => {});
+    }
+  }
+
+  const prefMenuDownloads = document.getElementById('pref-menu-downloads');
+  const prefMenuCompleted = document.getElementById('pref-menu-completed');
+  const prefMenuMyTorrents = document.getElementById('pref-menu-my-torrents');
+  const prefMenuPreferences = document.getElementById('pref-menu-preferences');
+  const prefStatusBar = document.getElementById('pref-status-bar');
+  const prefSidebarSpeed = document.getElementById('pref-sidebar-speed');
+  const sidebarNetworkSummary = document.getElementById('sidebar-network-summary');
+
+  function updateSidebarSpeedVisibility(visible) {
+    if (sidebarNetworkSummary) {
+      sidebarNetworkSummary.style.display = visible ? 'block' : 'none';
+    }
+    if (prefSidebarSpeed) {
+      prefSidebarSpeed.checked = Boolean(visible);
+    }
+  }
+
+  if (prefMenuDownloads) prefMenuDownloads.addEventListener('change', onMenuVisibilityToggled);
+  if (prefMenuCompleted) prefMenuCompleted.addEventListener('change', onMenuVisibilityToggled);
+  if (prefMenuMyTorrents) prefMenuMyTorrents.addEventListener('change', onMenuVisibilityToggled);
+
+  if (prefStatusBar) {
+    prefStatusBar.addEventListener('change', async () => {
+      if (ipcRenderer) {
+        try {
+          await ipcRenderer.invoke('toggle-status-bar-speed', prefStatusBar.checked);
+        } catch (e) {}
+      }
+    });
+  }
+
+  if (prefSidebarSpeed) {
+    prefSidebarSpeed.addEventListener('change', () => {
+      const isVisible = prefSidebarSpeed.checked;
+      updateSidebarSpeedVisibility(isVisible);
+      if (ipcRenderer) {
+        ipcRenderer.invoke('save-preferences', { showSidebarSpeed: isVisible }).catch(() => {});
+      }
+    });
+  }
+
+  window.openNetworkSpeedWindow = function() {
+    if (ipcRenderer) {
+      ipcRenderer.invoke('open-network-monitor-window').catch(() => {});
+    }
+  };
+
+  // CLI Preferences & Management
+  const prefEnableCli = document.getElementById('pref-enable-cli');
+  const prefCliStatusText = document.getElementById('pref-cli-status-text');
+  const cliManualModal = document.getElementById('cli-manual-modal');
+  const cliStatusBanner = document.getElementById('cli-status-banner');
+  const cliStatusTitle = document.getElementById('cli-status-title');
+  const cliStatusSubtitle = document.getElementById('cli-status-subtitle');
+  const btnToggleCliInstall = document.getElementById('btn-toggle-cli-install');
+
+  let currentCliStatus = { installed: false, path: null, targetDir: '' };
+
+  async function updateCliStatusUI() {
+    if (!ipcRenderer) return;
+    try {
+      currentCliStatus = await ipcRenderer.invoke('get-cli-status');
+      const isInstalled = Boolean(currentCliStatus && currentCliStatus.installed);
+
+      if (prefEnableCli) prefEnableCli.checked = isInstalled;
+      if (prefCliStatusText) {
+        prefCliStatusText.innerHTML = isInstalled
+          ? `<span style="color: #16A34A; font-weight: 600;">● Active</span> <code style="font-size: 11px; background: var(--bg-hover, #F1F5F9); padding: 1px 4px; border-radius: 3px; font-family: monospace;">${currentCliStatus.path}</code>`
+          : `<span style="color: #94A3B8;">○ Not installed</span> (target: ${currentCliStatus.targetDir || '/opt/homebrew/bin'})`;
+      }
+
+      if (cliStatusBanner) {
+        if (isInstalled) {
+          cliStatusBanner.classList.add('installed');
+          cliStatusBanner.classList.remove('uninstalled');
+          if (cliStatusTitle) cliStatusTitle.textContent = 'CLI Command Active in Terminal';
+          if (cliStatusSubtitle) cliStatusSubtitle.innerHTML = `Installed at <code style="font-family: monospace;">${currentCliStatus.path}</code> (${currentCliStatus.inPath ? 'In PATH' : 'Available'})`;
+          if (btnToggleCliInstall) {
+            btnToggleCliInstall.textContent = 'Uninstall CLI';
+            btnToggleCliInstall.style.color = '#DC2626';
+          }
+        } else {
+          cliStatusBanner.classList.remove('installed');
+          cliStatusBanner.classList.add('uninstalled');
+          if (cliStatusTitle) cliStatusTitle.textContent = 'CLI Command Not Installed';
+          if (cliStatusSubtitle) cliStatusSubtitle.textContent = `Click below to install 'torrently' to ${currentCliStatus.targetDir || '/opt/homebrew/bin'}`;
+          if (btnToggleCliInstall) {
+            btnToggleCliInstall.textContent = 'Install CLI Command';
+            btnToggleCliInstall.style.color = '#2563EB';
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not update CLI status UI:', e);
+    }
+  }
+
+  if (prefEnableCli) {
+    prefEnableCli.addEventListener('change', async () => {
+      if (!ipcRenderer) return;
+      try {
+        if (prefEnableCli.checked) {
+          await ipcRenderer.invoke('install-cli');
+        } else {
+          await ipcRenderer.invoke('uninstall-cli');
+        }
+        await updateCliStatusUI();
+      } catch (err) {
+        console.warn('CLI toggle error:', err);
+      }
+    });
+  }
+
+  window.openCliManual = function() {
+    if (cliManualModal) {
+      cliManualModal.classList.add('active');
+      updateCliStatusUI();
+    }
+  };
+
+  window.closeCliManual = function() {
+    if (cliManualModal) {
+      cliManualModal.classList.remove('active');
+    }
+  };
+
+  window.toggleCliInstallation = async function() {
+    if (!ipcRenderer) return;
+    try {
+      if (currentCliStatus && currentCliStatus.installed) {
+        await ipcRenderer.invoke('uninstall-cli');
+      } else {
+        await ipcRenderer.invoke('install-cli');
+      }
+      await updateCliStatusUI();
+    } catch (err) {
+      alert('CLI Operation Failed: ' + err.message);
+    }
+  };
+
+  window.copyCliCommand = function(text, btn) {
+    navigator.clipboard.writeText(text);
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      btn.style.color = '#10B981';
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.style.color = '';
+      }, 1500);
+    }
+  };
+
   if (ipcRenderer) {
     try {
       const prefs = await ipcRenderer.invoke('get-preferences');
@@ -806,6 +1288,22 @@ document.addEventListener('DOMContentLoaded', async () => {
           completionNotifyEnabled = !!prefs.showCompletionNotification;
           if (prefCompletionNotify) prefCompletionNotify.checked = completionNotifyEnabled;
         }
+        if (prefs.showInStatusBar !== undefined && prefStatusBar) {
+          prefStatusBar.checked = Boolean(prefs.showInStatusBar);
+        }
+        if (prefSidebarSpeed) {
+          updateSidebarSpeedVisibility(Boolean(prefs.showSidebarSpeed));
+        }
+        if (prefs.enableCli !== undefined && prefEnableCli) {
+          prefEnableCli.checked = Boolean(prefs.enableCli);
+        }
+        if (prefs.menuVisibility) {
+          applyMenuVisibility(prefs.menuVisibility);
+          try {
+            localStorage.setItem(STORAGE_KEY_MENU_VISIBILITY, JSON.stringify(currentMenuVisibility));
+          } catch (e) {}
+        }
+        updateCliStatusUI();
       }
     } catch (err) {
       console.warn('Error loading preferences:', err);
@@ -835,13 +1333,27 @@ document.addEventListener('DOMContentLoaded', async () => {
         uploadLimit: parseInt(prefUlLimit.value, 10) || 0,
         maxDownloads: parseInt(prefMaxDownloads.value, 10) || 3,
         playCompletionSound: completionSoundEnabled,
-        showCompletionNotification: completionNotifyEnabled
+        showCompletionNotification: completionNotifyEnabled,
+        showInStatusBar: prefStatusBar ? prefStatusBar.checked : false,
+        showSidebarSpeed: prefSidebarSpeed ? prefSidebarSpeed.checked : false,
+        enableCli: prefEnableCli ? prefEnableCli.checked : true,
+        menuVisibility: {
+          downloads: prefMenuDownloads ? prefMenuDownloads.checked : true,
+          completed: prefMenuCompleted ? prefMenuCompleted.checked : true,
+          'my-torrents': prefMenuMyTorrents ? prefMenuMyTorrents.checked : false,
+          preferences: true
+        }
       };
       defaultSavePath = updated.savePath;
+      applyMenuVisibility(updated.menuVisibility);
+      try {
+        localStorage.setItem(STORAGE_KEY_MENU_VISIBILITY, JSON.stringify(currentMenuVisibility));
+      } catch (e) {}
 
       if (ipcRenderer) {
         await ipcRenderer.invoke('save-preferences', updated);
       }
+      updateCliStatusUI();
       alert('Preferences saved successfully!');
     });
   }
@@ -897,27 +1409,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         await ipcRenderer.invoke('open-player-window', { streamUrl, title });
         return;
       } catch (err) {
-        console.warn('Could not open separate player window, falling back to overlay:', err);
+        console.warn('Could not open separate player window:', err);
       }
     }
-
-    if (playerTitle) playerTitle.textContent = title || 'Torrent Media Stream';
-    if (videoElement) {
-      videoElement.onerror = null;
-      videoElement.src = streamUrl;
-      restoreVideoAudio(videoElement);
-      videoElement.load();
-      restoreVideoAudio(videoElement);
-      videoElement.play().catch((err) => {
-        console.warn('HTML5 Video play error:', err);
-      });
-
-      videoElement.onerror = () => {
-        console.warn('Video format or codec error in HTML5 player. Directing to external VLC/IINA.');
-      };
-    }
-
-    if (playerModal) playerModal.classList.add('active');
   };
 
 
@@ -942,11 +1436,45 @@ document.addEventListener('DOMContentLoaded', async () => {
   };
 
   window.togglePauseTorrent = async function(infoHash, isPaused) {
-    const card = torrentCardsMap.get(infoHash);
-    if (card) {
-      const pauseBtn = card.querySelector(`#btn-pause-${infoHash}`);
+    if (!infoHash) return;
+    const targetHash = infoHash.toLowerCase();
+
+    // Find card and existing data case-insensitively
+    let card = torrentCardsMap.get(infoHash) || torrentCardsMap.get(targetHash);
+    let prev = torrentDataMap.get(infoHash) || torrentDataMap.get(targetHash);
+    if (!card) {
+      for (const [k, v] of torrentCardsMap.entries()) {
+        if (k && k.toLowerCase() === targetHash) {
+          card = v;
+          break;
+        }
+      }
+    }
+    if (!prev) {
+      for (const [k, v] of torrentDataMap.entries()) {
+        if (k && k.toLowerCase() === targetHash) {
+          prev = v;
+          break;
+        }
+      }
+    }
+
+    const currentPaused = prev ? Boolean(prev.paused) : Boolean(isPaused);
+    const nextPaused = !currentPaused;
+
+    // Immediately update local data and render so UI responds without delay
+    if (prev) {
+      prev.paused = nextPaused;
+      prev._lastUserPauseToggle = Date.now();
+      if (nextPaused) {
+        prev.downloadSpeed = 0;
+        prev.uploadSpeed = 0;
+      }
+      renderTorrentCard(prev);
+    } else if (card) {
+      const pauseBtn = card.querySelector(`#btn-pause-${infoHash}`) || card.querySelector('.btn-pause-resume');
       if (pauseBtn) {
-        const nextPaused = !isPaused;
+        pauseBtn.classList.toggle('is-paused', nextPaused);
         pauseBtn.title = nextPaused ? 'Resume Torrent' : 'Pause Torrent';
         pauseBtn.onclick = () => togglePauseTorrent(infoHash, nextPaused);
         pauseBtn.innerHTML = nextPaused
@@ -956,10 +1484,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (ipcRenderer) {
-      if (isPaused) {
-        await ipcRenderer.invoke('resume-torrent', infoHash);
-      } else {
-        await ipcRenderer.invoke('pause-torrent', infoHash);
+      try {
+        if (currentPaused) {
+          await ipcRenderer.invoke('resume-torrent', infoHash);
+        } else {
+          await ipcRenderer.invoke('pause-torrent', infoHash);
+        }
+      } catch (err) {
+        console.error('Error toggling pause state:', err);
       }
     }
   };
@@ -1014,18 +1546,70 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  function formatETA(seconds) {
+    if (!seconds || !Number.isFinite(seconds) || seconds <= 0) return '';
+    if (seconds > 86400 * 30) return '> 30d';
+    const d = Math.floor(seconds / 86400);
+    const h = Math.floor((seconds % 86400) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+
+    if (d > 0) return `${d}d ${h}h`;
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+  }
+
+  let currentSubfileSizeMode = 'total'; // 'total', 'remaining', 'both'
+
+  window.cycleSubfileSizeMode = function() {
+    if (currentSubfileSizeMode === 'total') {
+      currentSubfileSizeMode = 'remaining';
+    } else if (currentSubfileSizeMode === 'remaining') {
+      currentSubfileSizeMode = 'both';
+    } else {
+      currentSubfileSizeMode = 'total';
+    }
+    document.querySelectorAll('.subfile-size').forEach(el => {
+      const length = parseInt(el.getAttribute('data-length') || '0', 10);
+      const downloaded = parseInt(el.getAttribute('data-downloaded') || '0', 10);
+      el.textContent = formatSubfileSizeText(length, downloaded);
+    });
+  };
+
+  function formatSubfileSizeText(length, downloaded) {
+    const remaining = Math.max(0, length - downloaded);
+    if (currentSubfileSizeMode === 'remaining') {
+      return remaining === 0 ? '0 B left' : `${formatBytes(remaining)} left`;
+    }
+    if (currentSubfileSizeMode === 'both') {
+      return `${formatBytes(downloaded)} / ${formatBytes(length)}`;
+    }
+    return formatBytes(length);
+  }
+
+  window.handleCardRowClick = function(event, infoHash) {
+    if (event.target.closest('button, input, select, a, .clickable, .subfile-play-btn, .action-status-badge, .status-icon-clean, .compact-path, .clickable-peer-count')) {
+      return;
+    }
+    const tData = torrentDataMap.get(infoHash);
+    if (tData && tData.files && tData.files.length > 0) {
+      toggleFilesAccordion(infoHash);
+    }
+  };
+
   window.toggleFilesAccordion = function(infoHash) {
     const accordion = document.getElementById(`files-accordion-${infoHash}`);
-    const btn = document.getElementById(`btn-files-toggle-${infoHash}`);
+    const pill = document.getElementById(`files-pill-${infoHash}`);
     if (!accordion) return;
     if (expandedTorrents.has(infoHash)) {
       expandedTorrents.delete(infoHash);
       accordion.classList.remove('expanded');
-      if (btn) btn.innerHTML = btn.innerHTML.replace('▴', '▾');
+      if (pill) pill.innerHTML = pill.innerHTML.replace('▴', '▾');
     } else {
       expandedTorrents.add(infoHash);
       accordion.classList.add('expanded');
-      if (btn) btn.innerHTML = btn.innerHTML.replace('▾', '▴');
+      if (pill) pill.innerHTML = pill.innerHTML.replace('▾', '▴');
       initColumnResizers(accordion);
     }
   };
@@ -1096,6 +1680,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     btnClosePlayer.addEventListener('click', closePlayerModal);
   }
 
+  // README & Release Notes Modal
+  const readmeModal = document.getElementById('readme-modal');
+  const btnCloseReadme = document.getElementById('btn-close-readme');
+
+  window.openReadmeModal = function() {
+    if (readmeModal) readmeModal.classList.add('active');
+  };
+
+  window.closeReadmeModal = function() {
+    if (readmeModal) readmeModal.classList.remove('active');
+  };
+
+  if (btnCloseReadme) {
+    btnCloseReadme.addEventListener('click', closeReadmeModal);
+  }
+
   function closeAllModals() {
     closeRemoveModal();
     closePromptModal();
@@ -1104,6 +1704,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     closePlayerModal();
     closeCreateTorrentModal();
     closeShareModal();
+    closeCliManual();
+    closeReadmeModal();
   }
 
   // Close all open dialogs on Escape key
@@ -1114,7 +1716,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Close modals when clicking outside modal content
-  [magnetModal, addPromptModal, removeModal, playerModal, createTorrentModal, shareModal].forEach((overlay) => {
+  [magnetModal, addPromptModal, removeModal, playerModal, createTorrentModal, shareModal, cliManualModal, readmeModal].forEach((overlay) => {
     if (overlay) {
       overlay.addEventListener('click', (e) => {
         if (e.target === overlay) {
@@ -1135,6 +1737,49 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (btnCancelCreate) btnCancelCreate.addEventListener('click', closeCreateTorrentModal);
   if (btnChooseCreateFile) btnChooseCreateFile.addEventListener('click', () => chooseCreateSource('file'));
   if (btnChooseCreateFolder) btnChooseCreateFolder.addEventListener('click', () => chooseCreateSource('folder'));
+
+  const btnApplySourcePath = document.getElementById('btn-apply-source-path');
+  const createSourcePathInput = document.getElementById('create-source-path-input');
+  if (btnApplySourcePath && createSourcePathInput) {
+    btnApplySourcePath.addEventListener('click', () => {
+      if (createSourcePathInput.value.trim()) {
+        setChosenCreateSource(createSourcePathInput.value.trim());
+      }
+    });
+    createSourcePathInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (createSourcePathInput.value.trim()) {
+          setChosenCreateSource(createSourcePathInput.value.trim());
+        }
+      }
+    });
+    createSourcePathInput.addEventListener('change', () => {
+      if (createSourcePathInput.value.trim()) {
+        setChosenCreateSource(createSourcePathInput.value.trim());
+      }
+    });
+  }
+
+  const hiddenCreateFile = document.getElementById('hidden-create-file');
+  if (hiddenCreateFile) {
+    hiddenCreateFile.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files.length > 0) {
+        const f = e.target.files[0];
+        setChosenCreateSource(f.path || f.name, false);
+      }
+    });
+  }
+
+  const hiddenCreateFolder = document.getElementById('hidden-create-folder');
+  if (hiddenCreateFolder) {
+    hiddenCreateFolder.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files.length > 0) {
+        const f = e.target.files[0];
+        setChosenCreateSource(f.path || f.name, true);
+      }
+    });
+  }
 
   if (btnCloseShareModal) btnCloseShareModal.addEventListener('click', closeShareModal);
   if (btnCloseShareDone) btnCloseShareDone.addEventListener('click', closeShareModal);
@@ -1204,36 +1849,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (filePath) {
           try {
             let isDir = false;
-            let fileSize = file.size || 0;
             if (typeof require !== 'undefined') {
               const fs = require('fs');
               const s = fs.statSync(filePath);
               isDir = s.isDirectory();
-              if (!isDir) fileSize = s.size;
             }
-            selectedCreateSource = {
-              path: filePath,
-              name: file.name,
-              isDirectory: isDir,
-              size: fileSize
-            };
-            const typeBadge = isDir ? '<span class="source-badge">DIRECTORY</span>' : '<span class="source-badge">FILE</span>';
-            const sizeInfo = isDir ? 'All sub-files & folders auto-included' : formatBytes(fileSize);
-            createSourcePreview.innerHTML = `
-              <div class="source-selected-info">
-                <div>
-                  ${typeBadge}
-                  <strong style="margin-left: 6px; color: #0F172A;">${file.name}</strong>
-                  <div style="font-size: 11px; color: #64748B; margin-top: 2px;">📁 ${filePath} (${sizeInfo})</div>
-                </div>
-              </div>
-            `;
-            if (createTorrentNameInput && !createTorrentNameInput.value.trim()) {
-              createTorrentNameInput.value = file.name;
-            }
-            if (btnSubmitCreate) btnSubmitCreate.disabled = false;
+            setChosenCreateSource(filePath, isDir);
           } catch (err) {
-            console.warn('Drop error:', err);
+            setChosenCreateSource(filePath, false);
           }
         }
       }
@@ -1270,12 +1893,20 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         closeCreateTorrentModal();
 
-        // Switch to "My Torrents" tab automatically
-        const myTabNav = document.querySelector('.nav-item[data-tab="my-torrents"]');
-        if (myTabNav) myTabNav.click();
+        // Switch to "My Torrents" tab if visible, otherwise switch to Downloads tab
+        if (currentMenuVisibility && currentMenuVisibility['my-torrents']) {
+          switchNavTab('my-torrents');
+        } else {
+          switchNavTab('downloads');
+        }
 
         if (created) {
           renderTorrentCard(created);
+          const card = document.getElementById(`card-${created.infoHash}`);
+          if (card) {
+            card.classList.add('card-just-added');
+            setTimeout(() => card.classList.remove('card-just-added'), 3000);
+          }
           // Automatically open the Share Modal for immediate 1-click Magnet & .torrent access!
           openShareModal(created.infoHash);
         }
@@ -1290,28 +1921,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Network Speed Test Handler
+  // Live Network Speed & Separate Monitor Window Handler
   const netMeter = document.getElementById('network-speed-meter');
   const netSpeedVal = document.getElementById('global-net-speed');
 
-  if (netMeter && netSpeedVal) {
+  if (netMeter) {
     netMeter.addEventListener('click', async () => {
-      if (!ipcRenderer || netSpeedVal.classList.contains('testing')) return;
-      netSpeedVal.classList.add('testing');
-      netSpeedVal.textContent = 'Testing...';
-
-      try {
-        const result = await ipcRenderer.invoke('run-network-speed-test');
-        if (result && result.success) {
-          netSpeedVal.textContent = `${result.speedMbps} Mbps (${result.latencyMs}ms)`;
-          netSpeedVal.title = `Latency: ${result.latencyMs}ms | Throughput: ${result.speedMbps} Mbps`;
-        } else {
-          netSpeedVal.textContent = 'Speed Test';
+      if (ipcRenderer) {
+        try {
+          await ipcRenderer.invoke('open-network-monitor-window');
+        } catch (err) {
+          console.warn('Failed to open network monitor window:', err);
         }
-      } catch (e) {
-        netSpeedVal.textContent = 'Speed Test';
-      } finally {
-        netSpeedVal.classList.remove('testing');
       }
     });
   }
@@ -1401,14 +2022,24 @@ document.addEventListener('DOMContentLoaded', async () => {
       filesList = prev.files;
     }
 
-    const merged = { ...prev, ...t, files: filesList };
+    let isPaused = (t.paused !== undefined) ? Boolean(t.paused) : Boolean(prev.paused);
+    if (prev._lastUserPauseToggle && (Date.now() - prev._lastUserPauseToggle < 2500)) {
+      // Respect recent user pause/resume click over stale in-flight IPC updates
+      isPaused = Boolean(prev.paused);
+    }
+
+    const merged = { ...prev, ...t, files: filesList, paused: isPaused };
+    if (isPaused) {
+      merged.downloadSpeed = 0;
+      merged.uploadSpeed = 0;
+    }
     torrentDataMap.set(t.infoHash, merged);
 
     const pct = Math.min(100, Math.floor((merged.progress || 0) * 100));
     const downloadedText = formatBytes(merged.downloaded || 0);
     const totalText = merged.length && merged.length > 0 ? formatBytes(merged.length) : 'Fetching metadata...';
-    const downSpeedText = merged.paused ? '0 B/s' : formatSpeed(merged.downloadSpeed || 0);
-    const upSpeedText = merged.paused ? '0 B/s' : formatSpeed(merged.uploadSpeed || 0);
+    const downSpeedText = isPaused ? '0 B/s' : formatSpeed(merged.downloadSpeed || 0);
+    const upSpeedText = isPaused ? '0 B/s' : formatSpeed(merged.uploadSpeed || 0);
     const singleFileIdx = (filesList.length === 1 && filesList[0].index !== undefined) ? filesList[0].index : 0;
     const streamUrl = merged.streamUrl || `http://127.0.0.1:8888/stream/${merged.infoHash}/${singleFileIdx}`;
     const saveLocation = merged.downloadPath || `${defaultSavePath}/${merged.name}`;
@@ -1449,24 +2080,39 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const isMyTorrent = Boolean(merged.isMyTorrent || merged.createdByUser);
 
+    const totalRemainingBytes = Math.max(0, (merged.length || 0) - (merged.downloaded || 0));
+    let combinedEta = '';
+    if (!merged.paused && !merged.verifying && pct < 100 && (merged.downloadSpeed || 0) > 1024 && totalRemainingBytes > 0) {
+      const combinedSec = Math.ceil(totalRemainingBytes / merged.downloadSpeed);
+      combinedEta = formatETA(combinedSec);
+    }
+    const combinedPctText = actionStatus === 'Done' ? '100%' : (isBusy ? '...' : (combinedEta ? `${pct}% (${combinedEta})` : `${pct}%`));
+
     function getSubfileStatusHTML(f) {
       const isWanted = f.wanted !== false;
-      const subPct = Math.min(100, Math.round((f.progress || 0) * 100));
+      const isDone = Boolean(f.isDone || (f.progress || 0) >= 1.0 || (f.length > 0 && (f.downloaded || 0) >= f.length));
+      if (isDone) {
+        return '<span class="subfile-status status-completed">Completed</span>';
+      }
       if (!isWanted) {
         return '<span class="subfile-status status-skipped">Skipped</span>';
-      }
-      if (subPct >= 100) {
-        return '<span class="subfile-status status-completed">Completed</span>';
       }
       if (merged.verifying || (actionStatus && actionStatus.includes('Verifying'))) {
         return '<span class="subfile-status status-verifying">Verifying...</span>';
       }
       if (merged.paused) {
-        return '<span class="subfile-status status-paused">Paused</span>';
+        return '<span class="subfile-status status-clean-pause">⏸ Paused</span>';
       }
-      const fileSpeed = (typeof f.downloadSpeed === 'number') ? f.downloadSpeed : 0;
+      const fileSpeed = (typeof f.downloadSpeed === 'number') ? f.downloadSpeed : (merged.downloadSpeed ? (merged.downloadSpeed / Math.max(1, filesList.filter(x => x.wanted !== false && !x.isDone).length)) : 0);
+      const remainingBytes = Math.max(0, f.length - (f.downloaded !== undefined ? f.downloaded : Math.round(f.length * (f.progress || 0))));
+      let etaStr = '';
+      if (fileSpeed > 1024 && remainingBytes > 0) {
+        const fileEtaSec = Math.ceil(remainingBytes / fileSpeed);
+        const formattedEta = formatETA(fileEtaSec);
+        if (formattedEta) etaStr = ` • ${formattedEta}`;
+      }
       const fileSpeedText = formatSpeed(fileSpeed);
-      return `<span class="subfile-status status-downloading">Downloading (↓ ${fileSpeedText})</span>`;
+      return `<span class="subfile-status status-downloading card-downloading-text">Downloading (↓ ${fileSpeedText}${etaStr})</span>`;
     }
 
     let card = torrentCardsMap.get(merged.infoHash);
@@ -1474,7 +2120,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Fast-path: Update existing DOM nodes without destroying innerHTML
     if (card) {
       const pctEl = card.querySelector('.compact-pct');
-      if (pctEl) pctEl.textContent = actionStatus === 'Done' ? '100%' : (isBusy ? '...' : pct + '%');
+      if (pctEl) pctEl.textContent = combinedPctText;
 
       const barFill = card.querySelector('.compact-bar-fill');
       if (barFill) barFill.style.width = pct + '%';
@@ -1485,10 +2131,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         pathEl.title = `📁 ${saveLocation} (Click to set new location)`;
       }
 
-      const pieceGrid = card.querySelector('.micro-piece-grid');
-      if (pieceGrid) {
-        pieceGrid.innerHTML = pieceSegmentsHTML;
-        pieceGrid.title = statusText;
+      const filesPill = card.querySelector(`#files-pill-${merged.infoHash}`);
+      if (filesPill && filesList.length > 0) {
+        const isExp = expandedTorrents.has(merged.infoHash);
+        filesPill.innerHTML = `📁 ${filesList.length} files ${isExp ? '▴' : '▾'}`;
       }
 
       const metricsEl = card.querySelector('.compact-metrics');
@@ -1496,20 +2142,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         const actionBadgeHTML = actionStatus
           ? `<span class="action-status-badge">${actionStatus}</span>`
           : '';
-        const downSpeedHTML = `<span>${merged.paused ? 'PAUSED' : '↓ ' + downSpeedText}</span>`;
+        const isDownloading = !merged.paused && !merged.verifying && pct < 100;
+        const downSpeedHTML = `<span class="${isDownloading ? 'card-downloading-text' : ''}">${merged.paused ? '<span class="status-icon-clean" title="Paused">⏸ Paused</span>' : (pct >= 100 ? '<span class="status-icon-clean" title="Completed">✓ Done</span>' : '↓ ' + downSpeedText + (combinedEta ? ` • ${combinedEta} left` : ''))}</span>`;
 
         let metricsHTML = '';
         if (isMyTorrent) {
+          const seedingBadgeText = merged.paused ? '⏸ Paused' : '🟢 Seeding';
           metricsHTML = `
-            <span class="badge-my-torrent">★ SEEDING SOURCE</span>
-            <span class="my-torrent-connected-nodes" title="Connected downloading nodes">👥 ${merged.numPeers || 0} Nodes</span>
+            <span class="status-icon-clean">${seedingBadgeText}</span>
+            <span class="clickable-peer-count" onclick="event.stopPropagation(); openPeersInspector('${merged.infoHash}', '${merged.name.replace(/'/g, "\\'")}')" title="Click to view and manage connected peers/nodes">👥 ${merged.numPeers || 0} Nodes</span>
             <span>↑ ${upSpeedText}</span>
             <span title="Transferred so far to swarm">⬆ ${formatBytes(merged.uploaded || 0)} transferred</span>
             <span>${totalText}</span>
           `;
         } else {
           metricsHTML = `
-            <span title="Seeders / Leechers" style="color: #0F172A; font-weight: 700;">🟢 ${seeders} / 🔵 ${leechers}</span>
+            <span class="clickable-peer-count" onclick="event.stopPropagation(); openPeersInspector('${merged.infoHash}', '${merged.name.replace(/'/g, "\\'")}')" title="Click to view and manage connected peers/nodes">🟢 ${seeders} Seeds / 🔵 ${leechers} Peers</span>
             ${actionBadgeHTML}
             ${downSpeedHTML}
             <span>↑ ${upSpeedText}</span>
@@ -1517,6 +2165,17 @@ document.addEventListener('DOMContentLoaded', async () => {
           `;
         }
         metricsEl.innerHTML = metricsHTML;
+      }
+
+      const nameEl = card.querySelector('.compact-name');
+      if (nameEl && isMyTorrent) {
+        let badgeEl = nameEl.querySelector('.badge-my-torrent');
+        if (!badgeEl) {
+          badgeEl = document.createElement('span');
+          nameEl.prepend(badgeEl);
+        }
+        badgeEl.className = merged.paused ? 'badge-my-torrent badge-paused' : 'badge-my-torrent';
+        badgeEl.textContent = merged.paused ? '⏸ PAUSED' : '🟢 MY SEED';
       }
 
       const locBtn = card.querySelector(`#btn-location-${merged.infoHash}`);
@@ -1534,6 +2193,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const pauseBtn = card.querySelector(`#btn-pause-${merged.infoHash}`);
       if (pauseBtn) {
         pauseBtn.disabled = Boolean(isBusy);
+        pauseBtn.classList.toggle('is-paused', Boolean(merged.paused));
         pauseBtn.title = merged.paused ? 'Resume Torrent' : 'Pause Torrent';
         pauseBtn.onclick = () => togglePauseTorrent(merged.infoHash, Boolean(merged.paused));
         pauseBtn.innerHTML = merged.paused
@@ -1563,19 +2223,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         initColumnResizers(accordion);
       }
 
-      const toggleBtn = card.querySelector(`#btn-files-toggle-${merged.infoHash}`);
-      if (toggleBtn && filesList.length > 0) {
-        const isExp = expandedTorrents.has(merged.infoHash);
-        toggleBtn.innerHTML = `📁 Files (${filesList.length}) ${isExp ? '▴' : '▾'}`;
-      }
-
       const accordionBody = card.querySelector('.files-accordion-body');
       if (accordionBody && filesList.length > 0) {
         filesList.forEach((f) => {
           const row = card.querySelector(`.subfile-row[data-file-idx="${f.index}"]`);
           if (row) {
             const isWanted = f.wanted !== false;
-            const subPct = Math.min(100, Math.round((f.progress || 0) * 100));
+            const isDone = Boolean(f.isDone || (f.progress || 0) >= 1.0 || (f.length > 0 && (f.downloaded || 0) >= f.length));
+            const subPct = isDone ? 100 : Math.min(99, Math.floor((f.progress || 0) * 100));
             const subStatus = getSubfileStatusHTML(f);
 
             const fill = row.querySelector('.subfile-progress-fill');
@@ -1587,6 +2242,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             const statusCell = row.querySelector('.subfile-status-cell');
             if (statusCell) statusCell.innerHTML = subStatus;
 
+            const sizeCell = row.querySelector('.subfile-size');
+            if (sizeCell) {
+              const downloadedBytes = (f.downloaded !== undefined) ? f.downloaded : (isDone ? f.length : Math.round(f.length * (f.progress || 0)));
+              sizeCell.setAttribute('data-length', f.length);
+              sizeCell.setAttribute('data-downloaded', downloadedBytes);
+              sizeCell.textContent = formatSubfileSizeText(f.length, downloadedBytes);
+            }
+
             if (isWanted) row.classList.remove('deselected');
             else row.classList.add('deselected');
           }
@@ -1594,18 +2257,26 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       const myTorrentsList = document.getElementById('my-torrents-list');
-      if (isMyTorrent && myTorrentsList) {
-        if (card.parentNode !== myTorrentsList) {
-          myTorrentsList.prepend(card);
-        }
-      } else if (pct >= 100 && !merged.verifying && !isBusy) {
-        if (completedList && card.parentNode !== completedList) {
-          completedList.prepend(card);
-        }
+      const isCompleted = pct >= 100 && !merged.verifying && !isBusy;
+      let targetList = activeList;
+      if (currentActiveTab === 'my-torrents') {
+        if (isMyTorrent && myTorrentsList) targetList = myTorrentsList;
+        else if (isCompleted && completedList) targetList = completedList;
+        else targetList = activeList;
+      } else if (currentActiveTab === 'completed') {
+        if (isCompleted && completedList) targetList = completedList;
+        else if (isMyTorrent && myTorrentsList) targetList = myTorrentsList;
+        else targetList = activeList;
       } else {
-        if (activeList && card.parentNode !== activeList) {
-          activeList.prepend(card);
+        // 'downloads' tab or default: user-created / shareable torrents appear in activeList as active seeding torrents!
+        if (isCompleted && !isMyTorrent && completedList) {
+          targetList = completedList;
+        } else {
+          targetList = activeList;
         }
+      }
+      if (targetList && card.parentNode !== targetList) {
+        targetList.prepend(card);
       }
       updateCounts();
       checkEmptyState();
@@ -1620,19 +2291,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const isExpanded = expandedTorrents.has(merged.infoHash);
     let filesHTML = '';
-    let filesToggleBtn = '';
+
+    const filesPillHTML = filesList.length > 0 ? `
+      <span class="files-summary-pill clickable" id="files-pill-${merged.infoHash}" onclick="event.stopPropagation(); toggleFilesAccordion('${merged.infoHash}')" title="Click to view file list (${filesList.length} files)">
+        📁 ${filesList.length} files ${isExpanded ? '▴' : '▾'}
+      </span>
+    ` : '';
 
     if (filesList.length > 0) {
-      filesToggleBtn = `
-        <button class="btn btn-secondary btn-sm" id="btn-files-toggle-${merged.infoHash}" onclick="toggleFilesAccordion('${merged.infoHash}')" title="Expand / Collapse File List">
-          📁 Files (${filesList.length}) ${isExpanded ? '▴' : '▾'}
-        </button>
-      `;
-
       let rowsHTML = '';
       filesList.forEach((f) => {
         const isWanted = f.wanted !== false;
-        const subPct = Math.min(100, Math.round((f.progress || 0) * 100));
+        const isDone = Boolean(f.isDone || (f.progress || 0) >= 1.0 || (f.length > 0 && (f.downloaded || 0) >= f.length));
+        const subPct = isDone ? 100 : Math.min(99, Math.floor((f.progress || 0) * 100));
         const subStatus = getSubfileStatusHTML(f);
 
         const isFileMedia = isAudioOrVideoFile(f.name);
@@ -1646,6 +2317,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             </button>`
           : '';
 
+        const fileDownloaded = (f.downloaded !== undefined) ? f.downloaded : (isDone ? f.length : Math.round(f.length * (f.progress || 0)));
+
         rowsHTML += `
           <div class="subfile-row ${isWanted ? '' : 'deselected'}" data-file-idx="${f.index}">
             <input type="checkbox" class="subfile-checkbox" ${isWanted ? 'checked' : ''} onchange="toggleFileWanted('${merged.infoHash}', ${f.index}, this.checked)" title="Include / Skip File">
@@ -1653,7 +2326,9 @@ document.addEventListener('DOMContentLoaded', async () => {
               ${getMediaIconSVG(f.name)}
               <span>${f.name}</span>
             </span>
-            <span class="subfile-size">${formatBytes(f.length)}</span>
+            <span class="subfile-size clickable" data-length="${f.length}" data-downloaded="${fileDownloaded}" onclick="event.stopPropagation(); cycleSubfileSizeMode();" title="Click to cycle size format: Total, Remaining, or Both">
+              ${formatSubfileSizeText(f.length, fileDownloaded)}
+            </span>
             <div class="subfile-progress-box" title="${subPct}% completed">
               <div class="subfile-progress-fill" style="width: ${subPct}%;"></div>
               <span class="subfile-progress-label">${subPct}%</span>
@@ -1698,10 +2373,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const initialActionBadgeHTML = actionStatus
       ? `<span class="action-status-badge">${actionStatus}</span>`
       : '';
-    const initialDownSpeedHTML = `<span>${merged.paused ? 'PAUSED' : '↓ ' + downSpeedText}</span>`;
+    const isDownloading = !merged.paused && !merged.verifying && pct < 100;
+    const initialDownSpeedHTML = `<span class="${isDownloading ? 'card-downloading-text' : ''}">${merged.paused ? '<span class="status-icon-clean" title="Paused">⏸ Paused</span>' : (pct >= 100 ? '<span class="status-icon-clean" title="Completed">✓ Done</span>' : '↓ ' + downSpeedText + (combinedEta ? ` • ${combinedEta} left` : ''))}</span>`;
 
     const myTorrentBadgeHTML = isMyTorrent
-      ? '<span class="badge-my-torrent">★ MY SEED</span> '
+      ? (merged.paused 
+          ? '<span class="badge-my-torrent badge-paused">⏸ PAUSED</span> '
+          : '<span class="badge-my-torrent">🟢 MY SEED</span> ')
       : '';
 
     const myTorrentActionsHTML = isMyTorrent
@@ -1719,16 +2397,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     let initialMetricsHTML = '';
     if (isMyTorrent) {
+      const seedingBadgeText = merged.paused ? '⏸ Paused' : '🟢 Seeding';
       initialMetricsHTML = `
-        <span class="badge-my-torrent">★ SEEDING SOURCE</span>
-        <span class="my-torrent-connected-nodes" title="Connected downloading nodes">👥 ${merged.numPeers || 0} Nodes</span>
+        <span class="status-icon-clean">${seedingBadgeText}</span>
+        <span class="clickable-peer-count" onclick="event.stopPropagation(); openPeersInspector('${merged.infoHash}', '${merged.name.replace(/'/g, "\\'")}')" title="Click to view and manage connected peers/nodes">👥 ${merged.numPeers || 0} Nodes</span>
         <span>↑ ${upSpeedText}</span>
         <span title="Transferred so far to swarm">⬆ ${formatBytes(merged.uploaded || 0)} transferred</span>
         <span>${totalText}</span>
       `;
     } else {
       initialMetricsHTML = `
-        <span title="Seeders / Leechers" style="color: #0F172A; font-weight: 700;">🟢 ${seeders} / 🔵 ${leechers}</span>
+        <span class="clickable-peer-count" onclick="event.stopPropagation(); openPeersInspector('${merged.infoHash}', '${merged.name.replace(/'/g, "\\'")}')" title="Click to view and manage connected peers/nodes">🟢 ${seeders} Seeds / 🔵 ${leechers} Peers</span>
         ${initialActionBadgeHTML}
         ${initialDownSpeedHTML}
         <span>↑ ${upSpeedText}</span>
@@ -1738,19 +2417,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     card.innerHTML = `
       <!-- Top Row: Icon, Title, Location & Actions -->
-      <div class="compact-row-main">
+      <div class="compact-row-main" onclick="handleCardRowClick(event, '${merged.infoHash}')" title="${filesList.length > 0 ? 'Click row to expand / collapse file list' : ''}">
         <div class="compact-title-group">
           <div class="compact-media-icon">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
           </div>
           <div class="compact-info">
             <h3 class="compact-name" title="${merged.name}">${myTorrentBadgeHTML}${merged.name}</h3>
-            <span class="compact-path clickable" onclick="setLocationTorrent('${merged.infoHash}')" title="📁 ${saveLocation} (Click to set new location)">📁 ${saveLocation}</span>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="compact-path clickable" onclick="setLocationTorrent('${merged.infoHash}')" title="📁 ${saveLocation} (Click to set new location)">📁 ${saveLocation}</span>
+              ${filesPillHTML}
+            </div>
           </div>
         </div>
 
         <div class="compact-actions">
-          ${filesToggleBtn}
           <button class="btn btn-secondary btn-sm btn-share-card" onclick="openShareModal('${merged.infoHash}')" title="Share this torrent (Get Magnet Link & Export .torrent)">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
             <span>Share</span>
@@ -1760,15 +2441,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
             <span>Location</span>
           </button>
-          <button class="btn btn-secondary btn-sm" onclick="openPeersInspector('${merged.infoHash}', '${merged.name.replace(/'/g, "\\'")}')" title="Inspect & Manage Connected Nodes">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-            <span>Nodes (${seeders})</span>
-          </button>
           <button class="btn btn-secondary btn-sm" id="btn-verify-${merged.infoHash}" onclick="verifyLocalTorrent('${merged.infoHash}')" title="Re-check & Verify Local Data on Disk" ${isBusy || merged.verifying ? 'disabled' : ''}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 11 12 14 15 10"/></svg>
             <span>${(merged.verifying || (actionStatus && actionStatus.includes('Verifying'))) ? 'Verifying...' : 'Verify'}</span>
           </button>
-          <button class="btn btn-secondary btn-sm btn-pause-resume" id="btn-pause-${merged.infoHash}" onclick="togglePauseTorrent('${merged.infoHash}', ${merged.paused || false})" title="${merged.paused ? 'Resume Torrent' : 'Pause Torrent'}" ${isBusy ? 'disabled' : ''}>
+          <button class="btn btn-secondary btn-sm btn-pause-resume ${merged.paused ? 'is-paused' : ''}" id="btn-pause-${merged.infoHash}" onclick="togglePauseTorrent('${merged.infoHash}', ${Boolean(merged.paused)})" title="${merged.paused ? 'Resume Torrent' : 'Pause Torrent'}" ${isBusy ? 'disabled' : ''}>
             ${merged.paused 
               ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg><span>Resume</span>'
               : '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg><span>Pause</span>'
@@ -1784,17 +2461,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         </div>
       </div>
 
-      <!-- Bottom Row: Micro Progress Bar, Piece Grid & Swarm Seeders/Leechers Metrics -->
+      <!-- Bottom Row: Single Main Progress Bar & Swarm Metrics -->
       <div class="compact-row-sub">
         <div class="compact-progress-container">
-          <span class="compact-pct">${actionStatus === 'Done' ? '100%' : (isBusy ? '...' : pct + '%')}</span>
+          <span class="compact-pct">${combinedPctText}</span>
           <div class="compact-bar-bg">
             <div class="compact-bar-fill" style="width: ${pct}%;"></div>
           </div>
-        </div>
-
-        <div class="micro-piece-grid" title="${statusText}">
-          ${pieceSegmentsHTML}
         </div>
 
         <div class="compact-metrics">
@@ -1812,18 +2485,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     const myTorrentsList = document.getElementById('my-torrents-list');
-    if (isMyTorrent && myTorrentsList) {
-      if (card.parentNode !== myTorrentsList) {
-        myTorrentsList.prepend(card);
-      }
-    } else if (pct >= 100 && !merged.verifying) {
-      if (completedList && card.parentNode !== completedList) {
-        completedList.prepend(card);
-      }
+    const isCompleted = pct >= 100 && !merged.verifying;
+    let targetList = activeList;
+    if (currentActiveTab === 'my-torrents') {
+      if (isMyTorrent && myTorrentsList) targetList = myTorrentsList;
+      else if (isCompleted && completedList) targetList = completedList;
+      else targetList = activeList;
+    } else if (currentActiveTab === 'completed') {
+      if (isCompleted && completedList) targetList = completedList;
+      else if (isMyTorrent && myTorrentsList) targetList = myTorrentsList;
+      else targetList = activeList;
     } else {
-      if (activeList && card.parentNode !== activeList) {
-        activeList.prepend(card);
+      // 'downloads' tab or default: user-created / shareable torrents appear in activeList as active seeding torrents!
+      if (isCompleted && !isMyTorrent && completedList) {
+        targetList = completedList;
+      } else {
+        targetList = activeList;
       }
+    }
+    if (targetList && card.parentNode !== targetList) {
+      targetList.prepend(card);
     }
 
     updateCounts();
@@ -1842,7 +2523,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const pctElem = card.querySelector('.compact-pct');
       const pctStr = pctElem ? pctElem.textContent : '0%';
       const pct = parseInt(pctStr, 10) || 0;
-      if (pct >= 100) {
+      if (pct >= 100 && !t.isMyTorrent && !t.createdByUser) {
         completedCount++;
       } else {
         activeCount++;
@@ -1873,6 +2554,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // IPC Event Listeners
   if (ipcRenderer) {
+    ipcRenderer.on('engine-loading-state', (event, data) => {
+      if (data && data.loading) {
+        showScreenLoading('Loading and indexing torrents...');
+      } else {
+        hideScreenLoading();
+      }
+    });
+
     ipcRenderer.on('torrent-added', (event, torrent) => {
       renderTorrentCard(torrent);
       checkEmptyState();
@@ -1904,14 +2593,55 @@ document.addEventListener('DOMContentLoaded', async () => {
       renderTorrentCard(updated);
     });
 
-    ipcRenderer.on('open-torrent-file', async (event, filePath) => {
+    const handleIncomingTorrentFile = async (filePath) => {
       if (!filePath) return;
-      if (typeof filePath === 'string' && filePath.startsWith('magnet:?')) {
-        const magnetInput = document.getElementById('magnet-input');
-        if (magnetInput) magnetInput.value = filePath;
-        openMagnetModal();
-      } else {
-        await openPromptModal(filePath);
+      const sanitized = sanitizeTorrentInput(filePath);
+      if (!sanitized) return;
+      await openPromptModal(sanitized);
+    };
+
+    ipcRenderer.on('open-torrent-file', async (event, filePath) => {
+      await handleIncomingTorrentFile(filePath);
+    });
+
+    ipcRenderer.on('live-network-speed', (event, snapshot) => {
+      const netSpeedVal = document.getElementById('global-net-speed');
+      if (netSpeedVal && snapshot && snapshot.current) {
+        const totalFormatted = formatSpeed(snapshot.current.total || 0);
+        netSpeedVal.textContent = totalFormatted;
+        const dlFormatted = formatSpeed(snapshot.current.down || 0);
+        const ulFormatted = formatSpeed(snapshot.current.up || 0);
+        const dlMbps = (snapshot.current.down * 8 / 1000000).toFixed(1);
+        const ulMbps = (snapshot.current.up * 8 / 1000000).toFixed(1);
+        netSpeedVal.title = `Live Network Speed:\n↓ ${dlFormatted} (${dlMbps} Mbps)  ↑ ${ulFormatted} (${ulMbps} Mbps)\nClick to open interactive speed graph & history`;
+      }
+      if (snapshot && snapshot.current) {
+        const prefDl = document.getElementById('pref-live-dl-speed');
+        const prefUl = document.getElementById('pref-live-ul-speed');
+        const prefTotal = document.getElementById('pref-live-total-speed');
+        if (prefDl) {
+          const dlBits = (snapshot.current.down * 8 / 1000000).toFixed(1);
+          prefDl.textContent = `${formatSpeed(snapshot.current.down || 0)} (${dlBits} Mbps)`;
+        }
+        if (prefUl) {
+          const ulBits = (snapshot.current.up * 8 / 1000000).toFixed(1);
+          prefUl.textContent = `${formatSpeed(snapshot.current.up || 0)} (${ulBits} Mbps)`;
+        }
+        if (prefTotal) {
+          const totalBits = ((snapshot.current.total || 0) * 8 / 1000000).toFixed(1);
+          prefTotal.textContent = `${formatSpeed(snapshot.current.total || 0)} (${totalBits} Mbps)`;
+        }
+      }
+    });
+
+    ipcRenderer.on('preferences-updated', (event, prefs) => {
+      if (prefs) {
+        if (prefStatusBar && prefs.showInStatusBar !== undefined) {
+          prefStatusBar.checked = Boolean(prefs.showInStatusBar);
+        }
+        if (prefSidebarSpeed && prefs.showSidebarSpeed !== undefined) {
+          updateSidebarSpeedVisibility(Boolean(prefs.showSidebarSpeed));
+        }
       }
     });
 
@@ -1924,5 +2654,39 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (e) {
       console.warn('Error querying initial torrents:', e);
     }
+
+    try {
+      const pendingFiles = await ipcRenderer.invoke('get-pending-open-files');
+      if (Array.isArray(pendingFiles)) {
+        for (const file of pendingFiles) {
+          await handleIncomingTorrentFile(file);
+        }
+      }
+    } catch (e) {}
+
+    try {
+      const liveSnapshot = await ipcRenderer.invoke('get-live-network-speed');
+      if (liveSnapshot && liveSnapshot.current) {
+        const netSpeedVal = document.getElementById('global-net-speed');
+        if (netSpeedVal) {
+          netSpeedVal.textContent = formatSpeed(liveSnapshot.current.total || 0);
+        }
+        const prefDl = document.getElementById('pref-live-dl-speed');
+        const prefUl = document.getElementById('pref-live-ul-speed');
+        const prefTotal = document.getElementById('pref-live-total-speed');
+        if (prefDl) {
+          const dlBits = (liveSnapshot.current.down * 8 / 1000000).toFixed(1);
+          prefDl.textContent = `${formatSpeed(liveSnapshot.current.down || 0)} (${dlBits} Mbps)`;
+        }
+        if (prefUl) {
+          const ulBits = (liveSnapshot.current.up * 8 / 1000000).toFixed(1);
+          prefUl.textContent = `${formatSpeed(liveSnapshot.current.up || 0)} (${ulBits} Mbps)`;
+        }
+        if (prefTotal) {
+          const totalBits = ((liveSnapshot.current.total || 0) * 8 / 1000000).toFixed(1);
+          prefTotal.textContent = `${formatSpeed(liveSnapshot.current.total || 0)} (${totalBits} Mbps)`;
+        }
+      }
+    } catch (e) {}
   }
 });

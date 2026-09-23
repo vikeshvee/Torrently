@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Torrently — Real-time Network Speed Monitor & History</title>
+  <link rel="stylesheet" href="network-monitor.css">
+</head>
+<body>
+  <div class="monitor-container">
+    <!-- Header -->
+    <header class="monitor-header">
+      <div class="header-left">
+        <div class="brand-badge">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+          </svg>
+        </div>
+        <div class="header-titles">
+          <div class="title-row">
+            <h1>Network Speed Monitor</h1>
+            <span class="live-pill" id="live-indicator">
+              <span class="pulse-dot"></span> LIVE
+            </span>
+          </div>
+          <p class="subtitle">Real-time throughput metrics, historical performance graph & timeline</p>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <button class="btn btn-toggle" id="btn-toggle-status-bar" title="Toggle speed display in MacBook Menu Bar / Status Bar">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+            <line x1="8" y1="21" x2="16" y2="21"/>
+            <line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
+          <span id="status-bar-btn-text">MacBook Status Bar: OFF</span>
+        </button>
+
+        <button class="btn btn-secondary" id="btn-export" title="Export historical speed data">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          <span>Export</span>
+        </button>
+
+        <button class="btn btn-secondary btn-danger-hover" id="btn-clear" title="Clear saved speed history">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+          </svg>
+          <span>Clear</span>
+        </button>
+
+        <button class="btn-window-close" onclick="window.close()" title="Close Speed Monitor Window">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Top KPI Cards -->
+    <section class="kpi-grid">
+      <div class="kpi-card download-kpi">
+        <div class="kpi-icon-wrap">
+          <span class="arrow-icon">↓</span>
+        </div>
+        <div class="kpi-content">
+          <span class="kpi-label">DOWNLOAD SPEED</span>
+          <div class="kpi-value-row">
+            <span class="kpi-main-val" id="val-dl-speed">0 KB/s</span>
+            <span class="kpi-sub-val" id="val-dl-sub">0.00 Mbps</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="kpi-card upload-kpi">
+        <div class="kpi-icon-wrap">
+          <span class="arrow-icon">↑</span>
+        </div>
+        <div class="kpi-content">
+          <span class="kpi-label">UPLOAD SPEED</span>
+          <div class="kpi-value-row">
+            <span class="kpi-main-val" id="val-ul-speed">0 KB/s</span>
+            <span class="kpi-sub-val" id="val-ul-sub">0.00 Mbps</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="kpi-card total-kpi">
+        <div class="kpi-icon-wrap">
+          <span class="arrow-icon">⚡</span>
+        </div>
+        <div class="kpi-content">
+          <span class="kpi-label">TOTAL LIVE SPEED</span>
+          <div class="kpi-value-row">
+            <span class="kpi-main-val" id="val-tot-speed">0 KB/s</span>
+            <span class="kpi-sub-val" id="val-tot-sub">0.00 Mbps</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="kpi-card peak-kpi">
+        <div class="kpi-icon-wrap">
+          <span class="arrow-icon">▲</span>
+        </div>
+        <div class="kpi-content">
+          <span class="kpi-label">PEAK RECORDED</span>
+          <div class="kpi-value-row">
+            <span class="kpi-main-val" id="val-peak-speed">0 KB/s</span>
+            <span class="kpi-sub-val" id="val-peak-sub">0.00 Mbps</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Graph Controls & Presets -->
+    <section class="toolbar-section">
+      <!-- Unit Selection (KB/s & MB/s vs kbps & Mbps) -->
+      <div class="unit-toggle-group" title="Switch graph and display speed units">
+        <span class="toolbar-label">Units:</span>
+        <button class="btn btn-unit active" data-unit="bytes" id="btn-unit-bytes">KB/s & MB/s</button>
+        <button class="btn btn-unit" data-unit="bits" id="btn-unit-bits">kbps & Mbps</button>
+      </div>
+
+      <!-- Time Range Selectors -->
+      <div class="range-group">
+        <span class="toolbar-label">View Range:</span>
+        <button class="btn btn-range active" data-range="300">5m</button>
+        <button class="btn btn-range" data-range="900">15m</button>
+        <button class="btn btn-range" data-range="3600">1h</button>
+        <button class="btn btn-range" data-range="21600">6h</button>
+        <button class="btn btn-range" data-range="86400">24h</button>
+        <button class="btn btn-range" data-range="all">All</button>
+      </div>
+
+      <!-- Live Follow / Past Navigation -->
+      <div class="follow-group">
+        <button class="btn btn-follow active" id="btn-follow-live" title="Auto-scroll with live incoming speed data">
+          <span class="follow-icon">●</span>
+          <span id="follow-btn-text">Follow Live</span>
+        </button>
+        <button class="btn btn-jump-live" id="btn-jump-live" style="display: none;" title="Scroll immediately to current live time">
+          Jump to Live ➔
+        </button>
+      </div>
+    </section>
+
+    <!-- Graph Container -->
+    <section class="chart-wrapper">
+      <div class="chart-header">
+        <div class="legend-group">
+          <div class="legend-item legend-dl">
+            <span class="legend-dot dl-dot"></span>
+            <span>Download (<span id="legend-dl-unit">KB/s</span>)</span>
+          </div>
+          <div class="legend-item legend-ul">
+            <span class="legend-dot ul-dot"></span>
+            <span>Upload (<span id="legend-ul-unit">KB/s</span>)</span>
+          </div>
+        </div>
+        <div class="chart-status-text" id="chart-status-info">Showing last 5 minutes</div>
+      </div>
+
+      <div class="canvas-container" id="canvas-container">
+        <canvas id="speed-canvas"></canvas>
+        <div class="chart-tooltip" id="chart-tooltip" style="display: none;">
+          <div class="tooltip-time" id="tooltip-time">--:--:--</div>
+          <div class="tooltip-row dl">
+            <span class="tooltip-label">↓ Download:</span>
+            <span class="tooltip-val" id="tooltip-dl">0 KB/s</span>
+          </div>
+          <div class="tooltip-row ul">
+            <span class="tooltip-label">↑ Upload:</span>
+            <span class="tooltip-val" id="tooltip-ul">0 KB/s</span>
+          </div>
+          <div class="tooltip-row total">
+            <span class="tooltip-label">⚡ Total:</span>
+            <span class="tooltip-val" id="tooltip-total">0 KB/s</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Timeline Scrollbar & Scrubber for scrolling to past/current time -->
+      <div class="timeline-scrubber-wrapper">
+        <span class="scrub-label scrub-left" id="scrub-start-time">Past</span>
+        <div class="timeline-track" id="timeline-track">
+          <input type="range" id="timeline-slider" min="0" max="1000" value="1000" step="1" title="Scroll timeline between past time and current time">
+        </div>
+        <span class="scrub-label scrub-right" id="scrub-end-time">Now (Live)</span>
+      </div>
+    </section>
+
+    <!-- Footer Stats -->
+    <footer class="monitor-footer">
+      <div class="footer-info">
+        <span id="data-points-count">0 recorded samples</span>
+        <span class="dot-separator">•</span>
+        <span id="total-session-transferred">Transferred: 0 MB Down / 0 MB Up</span>
+        <span class="dot-separator">•</span>
+        <span>History saved automatically</span>
+      </div>
+      <div class="footer-hint">
+        💡 Tip: Drag graph horizontally or scroll trackpad to browse past time
+      </div>
+    </footer>
+  </div>
+
+  <script src="network-monitor.js"></script>
+</body>
+</html>

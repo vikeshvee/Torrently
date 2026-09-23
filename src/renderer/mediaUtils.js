@@ -2,11 +2,13 @@
 
 const VIDEO_EXTENSIONS = new Set([
   'mp4', 'm4v', 'mkv', 'webm', 'avi', 'mov', 'wmv', 'flv',
-  '3gp', 'ts', 'ogv', 'mpg', 'mpeg', 'vob'
+  '3gp', 'ts', 'ogv', 'mpg', 'mpeg', 'vob', 'm2ts', 'mts',
+  'divx', 'xvid', 'asf', 'rm', 'rmvb'
 ]);
 
 const AUDIO_EXTENSIONS = new Set([
-  'mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma', 'opus', 'mka'
+  'mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma', 'opus',
+  'mka', 'ac3', 'eac3', 'dts', 'dtshd', 'aiff', 'alac'
 ]);
 
 function getFileExtension(filename) {
